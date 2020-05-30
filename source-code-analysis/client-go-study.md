@@ -11,7 +11,7 @@
 阅读源码之前，一定要知道informer的实现机制，不然不太好理解。因为这里面还是挺复杂的。informer主要是通过list-watch的的机制对k8s各种资源进行事件监听，然后实现快速的进行事件同步。下面我把informer的机制流图贴出来，以便后面分析代码的时候进行参照。
 下图来源k8s 官方例子sample-controller 的文档[controller-client-go](https://github.com/kubernetes/sample-controller/blob/master/docs/controller-client-go.md).
 
-![informer](/images/informer.png)
+![informer](images/informer.png)
 
 图中各部分的详细说明，官方例子中的文档有详细说明，此处就不在赘述了！
 
