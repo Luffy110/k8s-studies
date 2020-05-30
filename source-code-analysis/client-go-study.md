@@ -2,7 +2,7 @@
 
 **NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//..................代替了.**
 
-在正式开始之前，我们回顾下上次[kube-controller-mananger](/kube-controller-manager-study.md)的分析。在上一篇中，我们只分析了各种controller从workqueue中取数据，然后进行消费。但是并没有介绍这个workqueue中的数据的生产者是谁！它们是怎么从api-server那里收到的！
+在正式开始之前，我们回顾下上次[kube-controller-mananger](kube-controller-manager-study.md)的分析。在上一篇中，我们只分析了各种controller从workqueue中取数据，然后进行消费。但是并没有介绍这个workqueue中的数据的生产者是谁！它们是怎么从api-server那里收到的！
 
 这篇将详细的讲解下这其中的机制。
 
