@@ -15,6 +15,14 @@
 
 图中各部分的详细说明，官方例子中的文档有详细说明，此处就不在赘述了！
 
+在开始代码之前，我把client-go informer的类图展示一下，方便下面代码理解更加方便。由于为了类图看起来简洁，我把storage的部分分离开了，所以看的时候，要结合下面两张图能够更好的理解。或者查看[整个的类图](images/informerall.png).
+
+这个是整个informer的类图:
+![informerclassdiagram](images/informerclassdiagram.png)
+
+这个是indexer和DeltaFIFO的类图:
+![storageclassdiagram](images/storageclassdiagram.png)
+
 ## kube-controller-manager 回顾
 
 上次在讲解controller的时候，我们直接跳过了这部分代码。今天我就补下这部分的内容，然后再慢慢的进入到client-go的源码中。不然以上来就分析，也不太好将client-go和controller关联起来。
