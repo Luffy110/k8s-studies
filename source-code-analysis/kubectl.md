@@ -272,7 +272,7 @@ type Factory interface {
 }
 ```
 
-在这里，我就不分析factoryImpl实例是具体怎么实现这些接口的了。我们下面要以[create.NewCmdCreate(f, ioStreams)](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/kubectl/pkg/cmd/create/create.go#L98)为例深入的分析下create的command是怎么工作的。
+在这里，我们就不分析factoryImpl实例是具体怎么实现这些接口的了。我们下面要以[create命令](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/kubectl/pkg/cmd/create/create.go#L98)为例深入的分析下它是怎么工作的。
 
 ```go
 // NewCmdCreate returns new initialized instance of create sub command
@@ -350,6 +350,7 @@ func NewCmdCreate(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cob
 func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
     // raw only makes sense for a single file resource multiple objects aren't likely to do what you want.
     // the validator enforces this, so
+    //判断是否是Raw string ，如果是就直接http post过去创建了
     if len(o.Raw) > 0 {
         restClient, err := f.RESTClient()
         if err != nil {
@@ -358,6 +359,7 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
         return rawhttp.RawPost(restClient, o.IOStreams, o.Raw, o.FilenameOptions.Filenames[0])
     }
 
+    // 判断是否在创建之前要进行编辑
     if o.EditBeforeCreate {
         return RunEditOnCreate(f, o.PrintFlags, o.RecordFlags, o.IOStreams, cmd, &o.FilenameOptions)
     }
@@ -371,6 +373,7 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
         return err
     }
 
+    //创建一个Builder 实例，并初始化一些数据，在调用Do函数去嵌套Visitor
     r := f.NewBuilder().
         Unstructured().
         Schema(schema).
@@ -386,15 +389,18 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
     }
 
     count := 0
+    //调用上面builder.Do 返回的Result实例的Visit函数，执行创建资源操作
     err = r.Visit(func(info *resource.Info, err error) error {
         //....................................
 
+        // 这里要判断下是不是DryRun, 如果是的 就只打印object内容，不会创建资源
         if o.DryRunStrategy != cmdutil.DryRunClient {
             if o.DryRunStrategy == cmdutil.DryRunServer {
                 if err := o.DryRunVerifier.HasSupport(info.Mapping.GroupVersionKind); err != nil {
                     return cmdutil.AddSourceToErr("creating", info.Source, err)
                 }
             }
+            // 创建资源
             obj, err := resource.
                 NewHelper(info.Client, info.Mapping).
                 DryRun(o.DryRunStrategy == cmdutil.DryRunServer).
@@ -402,6 +408,7 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
             if err != nil {
                 return cmdutil.AddSourceToErr("creating", info.Source, err)
             }
+            //更新info
             info.Refresh(obj, true)
         }
 
@@ -420,7 +427,7 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
 
 ```
 
-这个函数里面用了个Visitor设计模式。但是它不是个简单的visitor使用。它使用的较为复杂，它现实了一堆嵌套的visitor。具体小例子可以参考[multipleNestedVisitor](https://github.com/Luffy110/golang-design-pattern/tree/master/24_nested_visitor)不过也是这个kubectl中最难理解的部分(个人认为).**(这里我要为大家推荐一本源码剖析的书，kubernetes源码剖析-郑东旭， 因为我也是看了这本书里面的讲解，才更深的理解了这部分。这本书不是完全的源码解析。目前只包括了master的分析。据说Node的部分会在第二本中分析。)**好了闲话不多说。 让我们回归正题，慢慢来分析。
+这个函数里面，在调用Builder创建Result的时候用了Visitor设计模式。并且它不是简单的使用了visitor，它写的较为复杂，它现实了一堆嵌套的visitor。为了更好理解，可以先参考小例子[MultipleNestedVisitor](https://github.com/Luffy110/golang-design-pattern/tree/master/24_nested_visitor)，个人觉得这部分也是kubectl中最难理解的部分.**(这里我要为大家推荐一本源码剖析的书，kubernetes源码剖析-郑东旭， 因为我也是看了这本书里面的讲解，才更深的理解了这部分。这本书不是完全的源码解析。目前只包括了master的分析。据说Node的部分会在第二本中分析)**. 好了闲话不多说。 让我们回归正题，慢慢来分析。
 
 首先我们来分析分析下面这段代码做了些什么！这里很关键！因为它会决定后面我们调用Visit时，嵌套了那些Visitor在里面。我们将一个一个来分析。
 
@@ -434,7 +441,7 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
         LabelSelectorParam(o.Selector).
         Flatten().
         Do()
-        
+ 
 ```
 
 这里我们想同学们都还记得这个f的实例是谁吧。没错，是factoryImpl。就是上面提到的用简单工厂模式生产出来的。既然我们知道了f是谁了。那我们就来看看[factoryImpl.NewBuilder()](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/kubectl/pkg/cmd/util/factory_client_access.go#L95)函数
@@ -457,7 +464,7 @@ func NewBuilder(restClientGetter RESTClientGetter) *Builder {
         }
         return restmapper.NewDiscoveryCategoryExpander(discoveryClient), err
     }
-
+    //创建了个Builder实例
     return newBuilder(
         restClientGetter.ToRESTConfig,
         (&cachingRESTMapperFunc{delegate: restClientGetter.ToRESTMapper}).ToRESTMapper,
@@ -466,7 +473,7 @@ func NewBuilder(restClientGetter RESTClientGetter) *Builder {
 }
 ```
 
-从上面code 我们看到它实例化了个Builder这个实例。
+从上面code 我们看到它实例化了个Builder实例。下面给出Builder的具体结构内容。
 
 ```go
 // Builder provides convenience functions for taking arguments and parameters
@@ -535,7 +542,7 @@ type Builder struct {
 }
 ```
 
-我们再来一个一个分析刚刚上面那个NewBuilder后面的的每个函数。其实这些函数除了最后Do函数是真正的构造多层嵌套Visitor之外，其他函数都是在给Builder实例赋值。不过这些赋值都很重要，因为可能会影响到后面的嵌套的visitor。也就是说，会影响到后面的Visit函数的行为。
+我们再来一个一个分析刚刚上面那个NewBuilder后面的每个函数。这些函数大多数都是在给Builder初始化一些变量值，也有部分是再构造嵌套的Visitor了。这些赋值都很重要，因为后面会根据这些变量值进行构建嵌套的Visitor, 所以也就是说，会影响到后面的Visit函数的具体行为。
 
 先来看看Unstructured()函数
 
@@ -551,6 +558,7 @@ func (b *Builder) Unstructured() *Builder {
         return b
     }
     b.objectTyper = unstructuredscheme.NewUnstructuredObjectTyper()
+    //创建个mapper，赋值给了builder 的mapper成员
     b.mapper = &mapper{
         localFn:      b.isLocal,
         restMapperFn: b.restMapperFn,
@@ -564,7 +572,7 @@ func (b *Builder) Unstructured() *Builder {
 
 上面这个函数创建了个mapper和objectTyper赋值给了Builder实例。
 
-先来看看Schema()函数
+再来看看Schema()函数
 
 ```go
 func (b *Builder) Schema(schema ContentValidator) *Builder {
@@ -573,7 +581,7 @@ func (b *Builder) Schema(schema ContentValidator) *Builder {
 }
 ```
 
-就是传入一个schema赋值给了builder实例。
+就是传入一个schema赋值给了builder的schema。
 
 下面是ContinueOnError()函数
 
@@ -587,7 +595,7 @@ func (b *Builder) ContinueOnError() *Builder {
 }
 ```
 
-这个函数将continueOnError 设置为了true。
+这个函数将builder的continueOnError设置为了true。
 
 下面是NamespaceParam()和DefaultNamespace()函数
 
@@ -607,7 +615,7 @@ func (b *Builder) DefaultNamespace() *Builder {
 }
 ```
 
-这里传入了namespace 并将defaultNamespace设置为了true。
+这里传入了namespace 赋值给了builder的namespace，并将builder的defaultNamespace设置为了true。
 
 下面是FilenameParam()函数
 
@@ -619,12 +627,14 @@ func (b *Builder) DefaultNamespace() *Builder {
 // If ContinueOnError() is set prior to this method, objects on the path that are not
 // recognized will be ignored (but logged at V(2)).
 func (b *Builder) FilenameParam(enforceNamespace bool, filenameOptions *FilenameOptions) *Builder {
+    // 校验一下filenameOptions是否正确
     if errs := filenameOptions.validate(); len(errs) > 0 {
         b.errs = append(b.errs, errs...)
         return b
     }
     recursive := filenameOptions.Recursive
     paths := filenameOptions.Filenames
+    // 循环的处理传入的文件
     for _, s := range paths {
         switch {
         case s == "-":
@@ -643,6 +653,7 @@ func (b *Builder) FilenameParam(enforceNamespace bool, filenameOptions *Filename
             b.Path(recursive, s)
         }
     }
+    //判断是否是使用Kustomize的方式创建的。
     if filenameOptions.Kustomize != "" {
         b.paths = append(b.paths, &KustomizeVisitor{filenameOptions.Kustomize,
             NewStreamVisitor(nil, b.mapper, filenameOptions.Kustomize, b.schema)})
@@ -709,6 +720,7 @@ func ExpandPathsToFileVisitors(mapper *mapper, paths string, recursive bool, ext
             return nil
         }
 
+        //构造了一个FileVisitor并创建了对应的StreamVisitor
         visitor := &FileVisitor{
             Path:          path,
             StreamVisitor: NewStreamVisitor(nil, mapper, path, schema),
@@ -733,11 +745,11 @@ func (b *Builder) RequireNamespace() *Builder {
 }
 ```
 
-上面这个函数就是判断create命令的执行内容从哪里来的。
+上面这个FilenameParam函数就是判断create命令的执行内容从哪里来的，并做相应的处理。
 
 1. 从标准输入
-2. 通过http or https获得。
-3. 通过FileVisitor list去读取对应path下的文件。这里每个FileVisitor里包含一个path和一个StreamVisitor。
+2. 通过URL Visitor去读取创建内容。
+3. 为每个Path创建一个FileVisitor，传入给builder.path。这里每个FileVisitor里包含一个path和一个StreamVisitor。
 4. 通过Kustomize，则创建一个KustomizeVisitor， 并传入了一个StreamVisitor。
 
 下面是LabelSelectorParam()和LabelSelector()函数
@@ -770,7 +782,7 @@ func (b *Builder) LabelSelector(selector string) *Builder {
 }
 ```
 
-上面两个函数就是检查是否有selector，如果没有就跳过不设置。如果有，就赋值给了labelSelector。
+上面两个函数就是检查是否有selector，如果没有就跳过不设置。如果有，就赋值给了labelSelector。这里我们的例子是没有带selector，所以这里我们跳过不设置。
 
 下面是Flatten()函数
 
@@ -785,7 +797,7 @@ func (b *Builder) Flatten() *Builder {
 
 ```
 
-上面函数将flatten设置为了true。
+上面函数将builder的flatten设置为了true。
 
 最后是Do()函数
 
@@ -795,14 +807,17 @@ func (b *Builder) Flatten() *Builder {
 // inputs are consumed by the first execution - use Infos() or Object() on the Result to capture a list
 // for further iteration.
 func (b *Builder) Do() *Result {
+    //创建一个Result实例
     r := b.visitorResult()
     r.mapper = b.Mapper()
     if r.err != nil {
         return r
     }
+    //如何设置了flatten 创建相应的visitor
     if b.flatten {
         r.visitor = NewFlattenListVisitor(r.visitor, b.objectTyper, b.mapper)
     }
+    //下面设置一下help func
     helpers := []VisitorFunc{}
     if b.defaultNamespace {
         helpers = append(helpers, SetNamespace(b.namespace))
@@ -814,6 +829,7 @@ func (b *Builder) Do() *Result {
     if b.requireObject {
         helpers = append(helpers, RetrieveLazy)
     }
+    // 如果continueOnError设置了，则创建相应的visitor
     if b.continueOnError {
         r.visitor = NewDecoratedVisitor(ContinueOnErrorVisitor{r.visitor}, helpers...)
     } else {
@@ -827,6 +843,7 @@ func (b *Builder) Do() *Result {
 
 ```go
 func (b *Builder) visitorResult() *Result {
+    //有错误，退出
     if len(b.errs) > 0 {
         return &Result{err: utilerrors.NewAggregate(b.errs)}
     }
@@ -836,21 +853,25 @@ func (b *Builder) visitorResult() *Result {
         b.labelSelector = &selector
     }
 
+    // 如果paths不空，则返回visitByPaths()结果
     // visit items specified by paths
     if len(b.paths) != 0 {
         return b.visitByPaths()
     }
 
+    // 如果labelSelector不空或者fieldSelector不空，则返回visitBySelector()结果
     // visit selectors
     if b.labelSelector != nil || b.fieldSelector != nil {
         return b.visitBySelector()
     }
 
+    // 如果resourceTuples不空，则返回visitByResource()结果
     // visit items specified by resource and name
     if len(b.resourceTuples) != 0 {
         return b.visitByResource()
     }
 
+    // 如果names不空，则返回visitByName()结果
     // visit items specified by name
     if len(b.names) != 0 {
         return b.visitByName()
@@ -901,10 +922,11 @@ func (r *Result) Visit(fn VisitorFunc) error {
 }
 ```
 
-下面我们假设是从文件的方式调用create的。那么我们经过FilenameParam函数过后，path就有值了。所以在visitorResult()函数中，我们就返回[b.visitByPaths()](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/cli-runtime/pkg/resource/builder.go#L1047)的结果。
+上面我们的例子是通过一个简单的文件方式调用create的。那么我们经过FilenameParam函数过后，paths就有值了。所以在visitorResult()函数中，我们应该返回的是[b.visitByPaths()](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/cli-runtime/pkg/resource/builder.go#L1047)结果。我们下面来看看这个函数具体实现。
 
 ```go
 func (b *Builder) visitByPaths() *Result {
+    //创建一个Result实例
     result := &Result{
         singleItemImplied:  !b.dir && !b.stream && len(b.paths) == 1,
         targetsSingleItems: true,
@@ -921,16 +943,19 @@ func (b *Builder) visitByPaths() *Result {
     }
 
     var visitors Visitor
+    //如果continueOnError是true就将paths转换为EagerVisitorList，否则转换为VisitorList
     if b.continueOnError {
         visitors = EagerVisitorList(b.paths)
     } else {
         visitors = VisitorList(b.paths)
     }
 
+    //flatten 设置了，则创建FlattenListVisitor
     if b.flatten {
         visitors = NewFlattenListVisitor(visitors, b.objectTyper, b.mapper)
     }
 
+    //如果latest设置，则创建相应的visitor
     // only items from disk can be refetched
     if b.latest {
         // must set namespace prior to fetching
@@ -939,6 +964,7 @@ func (b *Builder) visitByPaths() *Result {
         }
         visitors = NewDecoratedVisitor(visitors, RetrieveLatest)
     }
+    //如果labelSelector不为空，则创建相应的visitor
     if b.labelSelector != nil {
         selector, err := labels.Parse(*b.labelSelector)
         if err != nil {
@@ -946,21 +972,23 @@ func (b *Builder) visitByPaths() *Result {
         }
         visitors = NewFilteredVisitor(visitors, FilterByLabelSelector(selector))
     }
+
+    //将新创建的visitors赋值给了result.visitor
     result.visitor = visitors
     result.sources = b.paths
     return result
 }
 ```
 
-好，我们来看看这种情况下，是嵌套了哪些Visitor。首先我们知道这个continueOnError是true，所有我们会折行到visitors = EagerVisitorList(b.paths)这里。这个语句的意思就是把path 一个Visitor的slice强制转换成了EagerVisitorList。下面这个flatten也是个true，所以又通过NewFlattenListVisitor(visitors, b.objectTyper, b.mapper)创建了个Visitor， 并且把之前创建的EagerVisitorList传入了。显然我们没有设置latest这个参数，所以不会走入条件里面。下面再是labelSelector，虽然我们有调用LabelSelectorParam(o.Selector)，但是从我们上面举的例子，我们并没有传入selector这个flag。所以也不会满足条件。
+好，我们来看看我们这种情况下，通过这个函数是嵌套了哪些Visitor。首先我们知道这个continueOnError是true，所有我们会执行到visitors = EagerVisitorList(b.paths)这里。这个语句的意思就是把paths,一个Visitor的slice强制转换成了EagerVisitorList。下面这个flatten也是个true，所以又通过NewFlattenListVisitor(visitors, b.objectTyper, b.mapper)创建了个Visitor， 并且把之前创建的EagerVisitorList传入了。显然我们没有设置latest这个参数，所以不会走入条件里面。下面再是labelSelector，虽然我们有调用LabelSelectorParam(o.Selector)，但是从我们上面举的例子，我们并没有传入selector这个flag。所以也不会满足条件。
 
-好了，到这里我们捋一下，我们现在的Visitor是怎样的结构了。FlattenListVisitor -> EagerVisitorList (->FileVisitor -> StreamVisitor).
+好了，到这里我们捋一下，我们现在的Visitor是怎样的结构了。FlattenListVisitor -> EagerVisitorList -> slice(FileVisitor -> StreamVisitor).
 
-我们继续分析Do函数里面。首先 flatten 是ture，所以又将r.visitor传入并通过NewFlattenListVisitor创建了FlattenListVisitor返回给了r.visitor。然后continueOnError是true，就又创建了ContinueOnErrorVisitor，并把之前创建的visitor传入。再通过NewDecoratedVisitor 函数创建一个DecoratedVisitor，并传入了新创建的ContinueOnErrorVisitor。
+我们在回过头来继续分析Do函数里面。首先 flatten 是ture，所以又将r.visitor传入并通过NewFlattenListVisitor创建了FlattenListVisitor返回给了r.visitor。然后continueOnError是true，就又创建了ContinueOnErrorVisitor，并把之前创建的visitor传入。再通过NewDecoratedVisitor 函数创建一个DecoratedVisitor，并传入了新创建的ContinueOnErrorVisitor。
 
-到此。这种情况下的Visitor嵌套到此为止。我们来看看现在的Visitor是个怎么样的嵌套关系呢！DecoratedVisitor -> ContinueOnErrorVisitor -> FlattenListVisitor -> FlattenListVisitor -> EagerVisitorList (->FileVisitor -> StreamVisitor).
+到此。最终的多层Visitor嵌套到此为止。我们来看看现在的Visitor是个怎么样的嵌套关系呢！DecoratedVisitor -> ContinueOnErrorVisitor -> FlattenListVisitor -> FlattenListVisitor -> EagerVisitorList -> slice(FileVisitor -> StreamVisitor).
 
-好了，那当我们在上面RunCreate函数里调用r.Visit()函数时，我们现在来它是怎么一层一层调用的。下面来看看各个Visitor的实现。我们按照上面我们分析的的顺序一个一个来看。
+好了，那当我们在上面RunCreate函数里调用r.Visit()函数时，我们现在来看它是怎么一层一层调用的。下面来看看各个Visitor的实现。我们按照上面我们分析的的顺序一个一个来看。
 
 首先调用的是DecoratedVisitor，
 
@@ -1102,9 +1130,9 @@ func (v FlattenListVisitor) Visit(fn VisitorFunc) error {
 }
 ```
 
-这里也是FlattenListVisitor有一个Visitor的成员。并通过调用成员的Visit函数去执行。同理，这里也是将Visit函数中传入的VisitorFunc封装到了成员visitor的Visit函数中. 从链中，下一个Visitor还是FlattenListVisitor，所以这里是一样的。又嵌套了一层。在下面就是EagerVisitorList了。
+这里也是FlattenListVisitor有一个Visitor的成员。并通过调用成员的Visit函数去执行。同理，这里也是将Visit函数中传入的VisitorFunc封装到了成员visitor的Visit函数中. 从链中，下一个Visitor还是FlattenListVisitor，所以这里是一样的。又嵌套了一层。再下面就是EagerVisitorList了。
 
-我们这里再看看EagerVisitorList。
+我们再看看EagerVisitorList。
 
 ```go
 type EagerVisitorList []Visitor
@@ -1184,9 +1212,11 @@ type StreamVisitor struct {
 
 // Visit implements Visitor over a stream. StreamVisitor is able to distinct multiple resources in one stream.
 func (v *StreamVisitor) Visit(fn VisitorFunc) error {
+    //创建Yaml or Json 的解码器
     d := yaml.NewYAMLOrJSONDecoder(v.Reader, 4096)
     for {
         ext := runtime.RawExtension{}
+        //解码
         if err := d.Decode(&ext); err != nil {
             if err == io.EOF {
                 return nil
@@ -1194,13 +1224,16 @@ func (v *StreamVisitor) Visit(fn VisitorFunc) error {
             return fmt.Errorf("error parsing %s: %v", v.Source, err)
         }
         // TODO: This needs to be able to handle object in other encodings and schemas.
+        //去空格
         ext.Raw = bytes.TrimSpace(ext.Raw)
         if len(ext.Raw) == 0 || bytes.Equal(ext.Raw, []byte("null")) {
             continue
         }
+        //校验schema
         if err := ValidateSchema(ext.Raw, v.Schema); err != nil {
             return fmt.Errorf("error validating %q: %v", v.Source, err)
         }
+        //将给定的data转换为info结构
         info, err := v.infoForData(ext.Raw, v.Source)
         if err != nil {
             if fnErr := fn(info, err); fnErr != nil {
@@ -1257,7 +1290,7 @@ func (m *mapper) infoForData(data []byte, source string) (*Info, error) {
 }
 ```
 
-绕了一大圈，这里才是真正的读文件的操作。从StreamVisitor的Visit方法中可以看到，通过Json或者Yaml的的格式将内容读到内存，然后解码，在校验schema，再通过infoForData函数转出info类型，最后再调用VisitorFunc函数处理info数据,这里真正的处理函数就是这个函数，虽然在传递过程中多少有被其他的Visitor封装了下。
+绕了一大圈，这里才是真正的读文件的操作，并转换为k8s资源结构。从StreamVisitor的Visit方法中可以看到，通过Json或者Yaml的的格式将内容读到内存，然后解码，在校验schema，再通过infoForData函数转出info类型，最后再调用VisitorFunc函数处理info数据。这里真正的创建函数就是下面这个函数，虽然在传递过程中多少有被其他的Visitor封装了下。
 
 ```go
     err = r.Visit(func(info *resource.Info, err error) error {
@@ -1278,6 +1311,7 @@ func (m *mapper) infoForData(data []byte, source string) (*Info, error) {
                     return cmdutil.AddSourceToErr("creating", info.Source, err)
                 }
             }
+            //创建资源
             obj, err := resource.
                 NewHelper(info.Client, info.Mapping).
                 DryRun(o.DryRunStrategy == cmdutil.DryRunServer).
@@ -1294,6 +1328,10 @@ func (m *mapper) infoForData(data []byte, source string) (*Info, error) {
     })
 ```
 
-从这里我们可以看到，最后就是调用了Create的方法把相应的资源创建出来了。至此，create的命令就执行成功了。
+到这里我们可以看到，最后就是调用了Create的方法把相应的资源创建出来了。至此，create的命令就执行成功了。
 
-当执行完最后的VisitorFunc函数后，这些Visitor链怎么释放的呢！如果同学们对多层回调了解过，那就知道了，这个释放过程刚好和调用是相反。所以下面给出释放时候的调用。StreamVisitor -> FileVisitor -> EagerVisitorList -> FlattenListVisitor -> FlattenListVisitor -> ContinueOnErrorVisitor -> DecoratedVisitor.
+我们下面再来捋一下VisitorFunc在这些visitor里面的调用和释放顺序。
+
+由于类似于回调的方式，所以最里层的，最先调用。所以调用顺序如下：(StreamVisitor -> FileVisitor) -> EagerVisitorList -> FlattenListVisitor -> FlattenListVisitor -> ContinueOnErrorVisitor -> DecoratedVisitor.
+
+这些VisitorFunc基本上都是一层一层传入的。所以最外层的Func会最先完成。所以释放顺序如下：DecoratedVisitor -> ContinueOnErrorVisitor -> FlattenListVisitor -> FlattenListVisitor -> EagerVisitorList -> (FileVisitor -> StreamVisitor).
