@@ -58,16 +58,18 @@ func runPush(args []string) {
 	}
 
 	str := branch
+	if len(reviewers) > 0 {
+		str += "%"
+	}
 	for i, r := range reviewers {
-		if i == 0 {
-			str += "%r="
-		}
+		str += "r="
 		if i == len(reviewers)-1 {
 			str += r
 		} else {
 			str += r + ","
 		}
 	}
+
 	argus = append(argus, str)
 	exec.DoExecCommand(argus)
 }
