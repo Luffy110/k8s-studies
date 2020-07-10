@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamic-admission-webhook-example
+spec:
+  type: ClusterIP
+  ports:
+  - name: https-rest
+    port: 10000
+    targetPort: 10000
+  selector:
+    app: dynamic-admission-webhook-example

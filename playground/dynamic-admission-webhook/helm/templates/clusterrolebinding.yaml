@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name:  dynamic-admission-webhook-example
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name:  dynamic-admission-webhook-example
+subjects:
+- kind: ServiceAccount
+  name: dynamic-admission-webhook-example
+  namespace: {{ .Release.Namespace }}

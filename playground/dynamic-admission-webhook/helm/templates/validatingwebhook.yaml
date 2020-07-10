@@ -1,0 +1,25 @@
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: dynamic-admission-webhook-example
+webhooks:
+  - name: dynamic-admission-webhook-example.{{ .Release.Namespace }}.svc
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace | quote }}
+        name: dynamic-admission-webhook-example
+        path: "/validate"
+        port: 10000
+      caBundle: ""
+    rules:
+    - apiGroups:
+      - apps
+      apiVersions:
+      - v1
+      operations:
+      - UPDATE
+      resources:
+      - deployments
+      - deployments/scale
+      - replicasets/scale
+    failurePolicy: Ignore

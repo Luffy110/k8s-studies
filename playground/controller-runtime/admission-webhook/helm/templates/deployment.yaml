@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamic-admission-webhook-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dynamic-admission-webhook-example
+  template:
+    metadata:
+      labels:
+        app: dynamic-admission-webhook-example
+    spec:
+      serviceAccountName: dynamic-admission-webhook-example
+      containers:
+      - name: dynamic-admission-webhook-example
+        image: luffyao/dynamic-admission-webhook:controller-runtime-v1
+        imagePullPolicy: Always
+        args:
+        - -validatingwebhookname
+        - dynamic-admission-webhook-example
+        - -webhookserverport
+        - "10000"
+        - -servicename
+        - dynamic-admission-webhook-example
+        - -namespace
+        - {{ .Release.Namespace | quote }}
+        - -certpath
+        - /opt/cert
+      restartPolicy: Always
