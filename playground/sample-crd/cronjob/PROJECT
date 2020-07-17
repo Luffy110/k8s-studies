@@ -1,0 +1,7 @@
+version: "2"
+domain: tutorial.kubebuilder.io
+repo: sample-crd/cronjob
+resources:
+- group: batch
+  version: v1
+  kind: CronJob
