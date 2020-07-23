@@ -1,8 +1,8 @@
-# kube-scheduler 源码分析(基于release-1.18 branch)
+# kube-scheduler 源码分析（基于 release-1.18 branch)
 
-**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//..................代替了.**
+**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//.................. 代替了。**
 
-## 函数入口[scheduler.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-scheduler/scheduler.go)
+## 函数入口 [scheduler.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-scheduler/scheduler.go)
 
 ```go
 func main() {
@@ -24,8 +24,7 @@ func main() {
 }
 ```
 
-可以看到scheduler和controller基本都是一样的，都是使用了cobra CLI 第三方库。所以下面就直接去看看scheduler真正运行的函数吧.
-
+可以看到 scheduler 和 controller 基本都是一样的，都是使用了 cobra CLI 第三方库。所以下面就直接去看看 scheduler 真正运行的函数吧。
 ```go
 // Run executes the scheduler based on the given configuration. It only returns on error or when context is done.
 func Run(ctx context.Context, cc schedulerserverconfig.CompletedConfig, outOfTreeRegistryOptions ...Option) error {
@@ -93,17 +92,17 @@ func Run(ctx context.Context, cc schedulerserverconfig.CompletedConfig, outOfTre
 
 上面这个函数基本上干了下面几件事：
 
-1. 通过scheduler.New函数创建一个scheduler， 并且将ComponentConfig API中的相关参数传入进去。
+1. 通过 scheduler.New 函数创建一个 scheduler， 并且将 ComponentConfig API 中的相关参数传入进去。
 
-2. start 所有的informer。
+2. start 所有的 informer。
 
-3. 调用sched.Run(ctx)将scheduler调度起来。
+3. 调用 sched.Run(ctx) 将 scheduler 调度起来。
 
-好了下面将深入探索下[scheduler.New](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/scheduler.go#L223)和[scheduler.Run](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/scheduler.go#L363)干了什么。
+好了下面将深入探索下 [scheduler.New](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/scheduler.go#L223) 和 [scheduler.Run](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/scheduler.go#L363) 干了什么。
 
 ## Scheduler 的创建
 
-先来看看是如何通过New函数创建一个scheduler的。
+先来看看是如何通过 New 函数创建一个 scheduler 的。
 
 ```go
 // New returns a Scheduler
@@ -119,14 +118,14 @@ func New(client clientset.Interface,
         stopEverything = wait.NeverStop
     }
 
-    //这里是将ComponentConfig中的各种配置的参数赋值给schedulerOptions
+    //这里是将 ComponentConfig 中的各种配置的参数赋值给 schedulerOptions
     options := defaultSchedulerOptions
     for _, opt := range opts {
         opt(&options)
     }
 
     schedulerCache := internalcache.New(30*time.Second, stopEverything)
-    // 创建一个volume binder
+    // 创建一个 volume binder
     volumeBinder := scheduling.NewVolumeBinder(
         client,
         informerFactory.Core().V1().Nodes(),
@@ -137,7 +136,7 @@ func New(client clientset.Interface,
         time.Duration(options.bindTimeoutSeconds)*time.Second,
     )
 
-    //NewInTreeRegistry 构建所有树内的插件的register,如果有树外的插件，也进行合并。
+    //NewInTreeRegistry 构建所有树内的插件的 register, 如果有树外的插件，也进行合并。
     registry := frameworkplugins.NewInTreeRegistry()
     if err := registry.Merge(options.frameworkOutOfTreeRegistry); err != nil {
         return nil, err
@@ -145,7 +144,7 @@ func New(client clientset.Interface,
 
     snapshot := internalcache.NewEmptySnapshot()
 
-    //创建一个configurator
+    //创建一个 configurator
     configurator := &Configurator{
         client:                   client,
         recorderFactory:          recorderFactory,
@@ -210,37 +209,36 @@ func New(client clientset.Interface,
     sched.podPreemptor = &podPreemptorImpl{client}
     sched.scheduledPodsHasSynced = podInformer.Informer().HasSynced
 
-    //添加所有的event handler
+    //添加所有的 event handler
     addAllEventHandlers(sched, informerFactory, podInformer)
     return sched, nil
 }
 ```
 
-从代码里可以看到，其主要做了:
+从代码里可以看到，其主要做了：
+1. 将传入的 ComponentConfig 中的各种配置的参数赋值给 schedulerOptions。
 
-1. 将传入的ComponentConfig中的各种配置的参数赋值给schedulerOptions。
+2. 创建一个 volume binder。
 
-2. 创建一个volume binder。
+3. [frameworkplugins.NewInTreeRegistry()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/framework/plugins/registry.go#L45) 和 registry.Merge 构建所有树内的插件的 register, 如果有树外的插件，也进行合并。
 
-3. [frameworkplugins.NewInTreeRegistry()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/framework/plugins/registry.go#L45)和registry.Merge构建所有树内的插件的register,如果有树外的插件，也进行合并。
+4. 创建一个 configurator。
 
-4. 创建一个configurator。
+5. 根据不同的算法源来创建 scheduler。
 
-5. 根据不同的算法源来创建scheduler。
+   * 如果 Provider 不为空，就通过 configurator.createFromProvider 函数创建一个 scheduler.
 
-   * 如果Provider不为空，就通过configurator.createFromProvider函数创建一个scheduler.
+   * 如果 Policy 不为空。
 
-   * 如果Policy不为空。
+     1. 从配置文件中读取相关配置并初始化 Policy，最后通过 configurator.createFromConfig 创建 scheduler。
 
-     1. 从配置文件中读取相关配置并初始化Policy，最后通过configurator.createFromConfig创建scheduler。
+     2. 从 ConfigMap 中读取相关配置并初始化 Policy，最后通过 configurator.createFromConfig 创建 scheduler。
 
-     2. 从ConfigMap中读取相关配置并初始化Policy，最后通过configurator.createFromConfig创建scheduler。
+6. 注册所有相关的 [Eventhandler](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/eventhandlers.go)。
 
-6. 注册所有相关的[Eventhandler](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/eventhandlers.go)。
+从上面分析，可以看出真正创建 scheduler 的是 configurator。
 
-从上面分析，可以看出真正创建scheduler的是configurator。
-
-首先看看[configurator](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/factory.go#L73)的结构包含哪些字段。
+首先看看 [configurator](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/factory.go#L73) 的结构包含哪些字段。
 
 ```go
 // Configurator defines I/O, caching, and other functionality needed to
@@ -309,7 +307,7 @@ func (c *Configurator) createFromProvider(providerName string) (*Scheduler, erro
 }
 ```
 
-这个函数比较好理解，首先调用[algorithmprovider.NewRegistry()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/algorithmprovider/registry.go#L53)注册算法。然后根据传入的providername查找是否已经注册了。如果没注册，报错返回。如果注册了，就把defualtPlugin和自定义的plugin合并，然后调用create()函数创建scheduler。
+这个函数比较好理解，首先调用 [algorithmprovider.NewRegistry()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/algorithmprovider/registry.go#L53) 注册算法。然后根据传入的 providername 查找是否已经注册了。如果没注册，报错返回。如果注册了，就把 defualtPlugin 和自定义的 plugin 合并，然后调用 create() 函数创建 scheduler。
 
 ```go
 // createFromConfig creates a scheduler from the configuration file
@@ -416,33 +414,33 @@ func (c *Configurator) createFromConfig(policy schedulerapi.Policy) (*Scheduler,
 
 这个函数做的话就比上个函数多了。
 
-1. 通过这个[frameworkplugins.NewLegacyRegistry()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/framework/plugins/legacy_registry.go#L183)函数创建legacy的predicates和priorities算法。
+1. 通过这个 [frameworkplugins.NewLegacyRegistry()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/framework/plugins/legacy_registry.go#L183) 函数创建 legacy 的 predicates 和 priorities 算法。
 
-2. 获取predicate Key。
+2. 获取 predicate Key。
 
-    * 如果Policy没有配置Predicates，将使用legacy register的DefaultPredicates。
-    * 如果Policy配置了Predicates，就使用配置的Predicates。
+    * 如果 Policy 没有配置 Predicates，将使用 legacy register 的 DefaultPredicates。
+    * 如果 Policy 配置了 Predicates，就使用配置的 Predicates。
 
-3. 获取priority Key
-    * 如果没有配置Priorities，就用default 的Priorities。
-    * 如果配置了，就是用配置的Priorities。
+3. 获取 priority Key
+    * 如果没有配置 Priorities，就用 default 的 Priorities。
+    * 如果配置了，就是用配置的 Priorities。
 
-4. 调用getPredicateConfigs和getPriorityConfigs分别返回Predicate的plugin，pluginConfig和Priority的plugin，pluginConfig.
+4. 调用 getPredicateConfigs 和 getPriorityConfigs 分别返回 Predicate 的 plugin，pluginConfig 和 Priority 的 plugin，pluginConfig.
 
-5. 合并所有的Plugin configurations。合并Predicates的pluginConfig和Priorities的pluginConfig。
+5. 合并所有的 Plugin configurations。合并 Predicates 的 pluginConfig 和 Priorities 的 pluginConfig。
 
-6. 将合并后的plugin存到Configurator的Plugins中，将合并后的PluginConfig存到Configurator的PluginConfig。
+6. 将合并后的 plugin 存到 Configurator 的 Plugins 中，将合并后的 PluginConfig 存到 Configurator 的 PluginConfig。
 
-7. 调用create()函数创建scheduler。
+7. 调用 create() 函数创建 scheduler。
 
-上面那个函数最后都调用了create的函数去创建scheduler. 下面看看这个函数做了什么。
+上面那个函数最后都调用了 create 的函数去创建 scheduler. 下面看看这个函数做了什么。
 
 ```go
 // create a scheduler from a set of registered plugins.
 func (c *Configurator) create() (*Scheduler, error) {
     var extenders []core.SchedulerExtender
     var ignoredExtendedResources []string
-    // 如果externder 不为空，创建相应的externder
+    // 如果 externder 不为空，创建相应的 externder
     if len(c.extenders) != 0 {
         var ignorableExtenders []core.SchedulerExtender
         for ii := range c.extenders {
@@ -483,7 +481,7 @@ func (c *Configurator) create() (*Scheduler, error) {
         }
     }
 
-    // 创建 一个profile的集合
+    // 创建 一个 profile 的集合
     profiles, err := profile.NewMap(c.profiles, c.buildFramework, c.recorderFactory)
     if err != nil {
         return nil, fmt.Errorf("initializing profiles: %v", err)
@@ -508,7 +506,7 @@ func (c *Configurator) create() (*Scheduler, error) {
     )
     debugger.ListenForSignal(c.StopEverything)
 
-    // 创建一个Generic Scheduler
+    // 创建一个 Generic Scheduler
     algo := core.NewGenericScheduler(
         c.schedulerCache,
         podQueue,
@@ -534,21 +532,21 @@ func (c *Configurator) create() (*Scheduler, error) {
 }
 ```
 
-1. 如果externder 不为空，创建相应的externder。
+1. 如果 externder 不为空，创建相应的 externder。
 
-2. 通过[NewMap](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/profile/profile.go#L61)函数NewMap构建一个profile的集合，key是scheduler name,value是对应的configuration。
+2. 通过 [NewMap](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/profile/profile.go#L61) 函数 NewMap 构建一个 profile 的集合，key 是 scheduler name,value 是对应的 configuration。
 
-3. 创建Scheduling Queue。
+3. 创建 Scheduling Queue。
 
-4. 创建一个Generic Scheduler。
+4. 创建一个 Generic Scheduler。
 
-5. 创建Scheduler。
+5. 创建 Scheduler。
 
-好了，到此scheduler的创建部分，算是分析完了。
+好了，到此 scheduler 的创建部分，算是分析完了。
 
-## Scheduler的调度
+## Scheduler 的调度
 
-下面来分析分析scheduler.Run()做了些什么
+下面来分析分析 scheduler.Run() 做了些什么
 
 ```go
 // Run begins watching and scheduling. It waits for cache to be synced, then starts scheduling and blocked until the context is done.
@@ -562,9 +560,9 @@ func (sched *Scheduler) Run(ctx context.Context) {
 }
 ```
 
-这个函数代码不多，注释也写的很清楚。这个函数主要是watching和scheduling，它首先等待cache是否被同步了。然后开始scheduling直到context Done. 这里面有两个函数sched.SchedulingQueue.Run()和sched.scheduleOne，一个是往queue里面放消息，一个从里面读取消息来处理。下面将会来详细的分析。
+这个函数代码不多，注释也写的很清楚。这个函数主要是 watching 和 scheduling，它首先等待 cache 是否被同步了。然后开始 scheduling 直到 context Done. 这里面有两个函数 sched.SchedulingQueue.Run() 和 sched.scheduleOne，一个是往 queue 里面放消息，一个从里面读取消息来处理。下面将会来详细的分析。
 
-首先来分析下[sched.SchedulingQueue.Run()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/internal/queue/scheduling_queue.go#L98). 我们知道这个ScheduingQueue其实是一个接口，所以想要看Run的具体实现，还得看它的具体实现类是什么。这里其实上面也有说到。在create的第三步的时候，我们提到创建一个scheduing queue的，这里其实就是通过调用NewSchedulingQueue创建了一个PriorityQueue。我们首先来看下这个PriorityQueue包含了哪些内容。
+首先来分析下 [sched.SchedulingQueue.Run()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/internal/queue/scheduling_queue.go#L98). 我们知道这个 ScheduingQueue 其实是一个接口，所以想要看 Run 的具体实现，还得看它的具体实现类是什么。这里其实上面也有说到。在 create 的第三步的时候，我们提到创建一个 scheduing queue 的，这里其实就是通过调用 NewSchedulingQueue 创建了一个 PriorityQueue。我们首先来看下这个 PriorityQueue 包含了哪些内容。
 
 ```go
 // PriorityQueue implements a scheduling queue.
@@ -612,15 +610,15 @@ type PriorityQueue struct {
 }
 ```
 
-其实这里我们看到。它维护了三个Queue(activeQ,podBackoffQ,unschedulableQ),
+其实这里我们看到。它维护了三个 Queue(activeQ,podBackoffQ,unschedulableQ),
 
-1. activeQ: 存放的是下次调度的时候，需要处理的pod。
+1. activeQ: 存放的是下次调度的时候，需要处理的 pod。
 
-2. podBackoffQ: 是一个根据backoff到期时间排序的堆。已经完成回退的Pods在调度程序查看activeQ之前从这个堆中弹出。
+2. podBackoffQ: 是一个根据 backoff 到期时间排序的堆。已经完成回退的 Pods 在调度程序查看 activeQ 之前从这个堆中弹出。
 
-3. unschedulableQ: 这个queue存放的是上一次处理失败的pod，放在这里，等待pod状态发生变化，再将其放到activeQ进行处理。
+3. unschedulableQ: 这个 queue 存放的是上一次处理失败的 pod，放在这里，等待 pod 状态发生变化，再将其放到 activeQ 进行处理。
 
-下面看看它的Run做了什么？
+下面看看它的 Run 做了什么？
 
 ```go
 // Run starts the goroutine to pump from podBackoffQ to activeQ
@@ -630,26 +628,26 @@ func (p *PriorityQueue) Run() {
 }
 ```
 
-这里就是起了两个goroutine 定期的从BackoffQ和unSchedulableQ中看有没有可以送到activeQ中的pod。
+这里就是起了两个 goroutine 定期的从 BackoffQ 和 unSchedulableQ 中看有没有可以送到 activeQ 中的 pod。
 
-为了便于理解，我先贴下从官方的pod调度上下文。
+为了便于理解，我先贴下从官方的 pod 调度上下文。
 
 ![pod scheduing context](images/scheduler.png)
 
 这个流图上给出了很多步骤，所以下面将会从源码上看看每一步骤做了什么。
 
-下面我们再来看看真正核心的处理函数sched.scheduleOne。
+下面我们再来看看真正核心的处理函数 sched.scheduleOne。
 
 ```go
 // scheduleOne does the entire scheduling workflow for a single pod.  It is serialized on the scheduling algorithm's host fitting.
 func (sched *Scheduler) scheduleOne(ctx context.Context) {
-    //1. 从queue中取出需要处理的pod info
+    //1. 从 queue 中取出需要处理的 pod info
     podInfo := sched.NextPod()
     // pod could be nil when schedulerQueue is closed
     if podInfo == nil || podInfo.Pod == nil {
         return
     }
-    //2. 看下pod对应的profile 是哪个
+    //2. 看下 pod 对应的 profile 是哪个
     pod := podInfo.Pod
     prof, err := sched.profileForPod(pod)
     if err != nil {
@@ -658,7 +656,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
         klog.Error(err)
         return
     }
-    // 3. 检查是否是skip的pod schedule
+    // 3. 检查是否是 skip 的 pod schedule
     if sched.skipPodSchedule(prof, pod) {
         return
     }
@@ -672,7 +670,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
     schedulingCycleCtx, cancel := context.WithCancel(ctx)
     defer cancel()
 
-    //4. 调用Schedule(包括filter 和score)
+    //4. 调用 Schedule（包括 filter 和 score)
     scheduleResult, err := sched.Algorithm.Schedule(schedulingCycleCtx, prof, state, pod)
     if err != nil {
         // Schedule() may have failed because the pod would not fit on any host, so we try to
@@ -717,7 +715,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
     // Otherwise, binding of volumes is started after the pod is assumed, but before pod binding.
     //
     // This function modifies 'assumedPod' if volume binding is required.
-    // 5. 先假设pod 的Volume可以binding到对应的node
+    // 5. 先假设 pod 的 Volume 可以 binding 到对应的 node
     allBound, err := sched.VolumeBinder.AssumePodVolumes(assumedPod, scheduleResult.SuggestedHost)
     if err != nil {
         sched.recordSchedulingFailure(prof, assumedPodInfo, err, SchedulerError,
@@ -727,7 +725,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
     }
 
     // Run "reserve" plugins.
-    // 6. 运行reserve 插件
+    // 6. 运行 reserve 插件
     if sts := prof.RunReservePlugins(schedulingCycleCtx, state, assumedPod, scheduleResult.SuggestedHost); !sts.IsSuccess() {
         sched.recordSchedulingFailure(prof, assumedPodInfo, sts.AsError(), SchedulerError, sts.Message())
         metrics.PodScheduleErrors.Inc()
@@ -735,7 +733,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
     }
 
     // assume modifies `assumedPod` by setting NodeName=scheduleResult.SuggestedHost
-    // 7. 假设pod可以调度到指定的node
+    // 7. 假设 pod 可以调度到指定的 node
     err = sched.assume(assumedPod, scheduleResult.SuggestedHost)
     if err != nil {
         // This is most probably result of a BUG in retrying logic.
@@ -751,7 +749,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
     }
 
     // Run "permit" plugins.
-    // 8. 执行permit 插件
+    // 8. 执行 permit 插件
     runPermitStatus := prof.RunPermitPlugins(schedulingCycleCtx, state, assumedPod, scheduleResult.SuggestedHost)
     if runPermitStatus.Code() != framework.Wait && !runPermitStatus.IsSuccess() {
         var reason string
@@ -772,13 +770,13 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
     }
 
     // bind the pod to its host asynchronously (we can do this b/c of the assumption step above).
-    // 9. 异步调用binding 到node上
+    // 9. 异步调用 binding 到 node 上
     go func() {
         bindingCycleCtx, cancel := context.WithCancel(ctx)
         defer cancel()
         metrics.SchedulerGoroutines.WithLabelValues("binding").Inc()
         defer metrics.SchedulerGoroutines.WithLabelValues("binding").Dec()
-        //9.1 等待permit完成。
+        //9.1 等待 permit 完成。
         waitOnPermitStatus := prof.WaitOnPermit(bindingCycleCtx, assumedPod)
         if !waitOnPermitStatus.IsSuccess() {
             var reason string
@@ -799,7 +797,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
         }
 
         // Bind volumes first before Pod
-        // 9.2 绑定volumes
+        // 9.2 绑定 volumes
         if !allBound {
             err := sched.bindVolumes(assumedPod)
             if err != nil {
@@ -853,35 +851,35 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 }
 ```
 
-1. 从queue中取一个pod(这里NextPod只是一个接口。其实是在调用create的时候传入了internalqueue.MakeNextPodFunc(podQueue)给了NextPod。所以其实真正取数据的是这个函数。从代码中也能看到，它调用了queue的Pop函数，从queue中取数据)。
+1. 从 queue 中取一个 pod（这里 NextPod 只是一个接口。其实是在调用 create 的时候传入了 internalqueue.MakeNextPodFunc(podQueue) 给了 NextPod。所以其实真正取数据的是这个函数。从代码中也能看到，它调用了 queue 的 Pop 函数，从 queue 中取数据）。
 
-2. 通过pod返回对应的profile。
+2. 通过 pod 返回对应的 profile。
 
-3. 检查是否skip这次调度。
+3. 检查是否 skip 这次调度。
 
-4. 调用sched.Algorithm.Schedule()函数选出最优的node(这里包括里流图里面PreFilter,Filter,PreScore,Score)。
-    * 如果成功选出node，将执行step 5。
+4. 调用 sched.Algorithm.Schedule() 函数选出最优的 node（这里包括里流图里面 PreFilter,Filter,PreScore,Score)。
+    * 如果成功选出 node，将执行 step 5。
     * 如果失败，将会执行抢占机制。
 
-5. 调用sched.VolumeBinder.AssumePodVolumes尝试从cache的node中更新相应的pv，pvc。
+5. 调用 sched.VolumeBinder.AssumePodVolumes 尝试从 cache 的 node 中更新相应的 pv，pvc。
 
 6. 运行 "reserve" 插件。
 
-7. 调用sched.assume，将pod的nodename更新到cache中。
+7. 调用 sched.assume，将 pod 的 nodename 更新到 cache 中。
 
 8. 执行 "permit" 插件。
 
-9. 上面执行步骤全部成功，将会进入binding阶段(这个阶段可以异步执行。所以看到是用了一个go routine执行的)。
-    * 等待permit 执行成功。
-    * 如果在assumePodVolumes的时候没有相应的binding，那这次就要binding。
+9. 上面执行步骤全部成功，将会进入 binding 阶段（这个阶段可以异步执行。所以看到是用了一个 go routine 执行的）。
+    * 等待 permit 执行成功。
+    * 如果在 assumePodVolumes 的时候没有相应的 binding，那这次就要 binding。
     * 执行 "prebind" 插件。
     * 执行 “bind” 操作。
-    * 当bind操作成功，执行 "postbind" 插件。
+    * 当 bind 操作成功，执行 "postbind" 插件。
 
-好了，到此pod的scheduler就执行完成了。
+好了，到此 pod 的 scheduler 就执行完成了。
 
-对于第4步，我们再来深入分析下。
-再此之前，首先就来分析分析[sched.Algorithm.Schedule](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/core/generic_scheduler.go#L105)，同样ScheduleAlgorithm这个只是个接口类型。我们需要找到对应的实现类。上面我们在分析scheduler创建的时候，有说过create这个函数，它里面就通过调用NewGenericScheduler函数创建了个ScheduleAlgorithm的实现类，然后赋值给了Scheduler的Algorithm。 所以这里的Schedule函数就是genericScheduler实现的[Schedule](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/core/generic_scheduler.go#L150)函数。
+对于第 4 步，我们再来深入分析下。
+再此之前，首先就来分析分析 [sched.Algorithm.Schedule](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/core/generic_scheduler.go#L105)，同样 ScheduleAlgorithm 这个只是个接口类型。我们需要找到对应的实现类。上面我们在分析 scheduler 创建的时候，有说过 create 这个函数，它里面就通过调用 NewGenericScheduler 函数创建了个 ScheduleAlgorithm 的实现类，然后赋值给了 Scheduler 的 Algorithm。 所以这里的 Schedule 函数就是 genericScheduler 实现的 [Schedule](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/core/generic_scheduler.go#L150) 函数。
 
 ```go
 func (g *genericScheduler) Schedule(ctx context.Context, prof *profile.Profile, state *framework.CycleState, pod *v1.Pod) (result ScheduleResult, err error) {
@@ -967,17 +965,17 @@ func (g *genericScheduler) Schedule(ctx context.Context, prof *profile.Profile, 
 
 ```
 
-1. 调用RunPreFilterPlugins执行PreFilter插件。
+1. 调用 RunPreFilterPlugins 执行 PreFilter 插件。
 
-2. 调用findNodesThatFitPod执行Filter插件。
+2. 调用 findNodesThatFitPod 执行 Filter 插件。
 
-3. 调用RunPreScorePlugins执行PreScore插件。
+3. 调用 RunPreScorePlugins 执行 PreScore 插件。
 
-4. 调用prioritizeNodes执行Score插件。
+4. 调用 prioritizeNodes 执行 Score 插件。
 
-下面我们以RunPreFilterPlugins为例，分析下他是怎么样调用到PreFilter的插件的。
+下面我们以 RunPreFilterPlugins 为例，分析下他是怎么样调用到 PreFilter 的插件的。
 
-首先我们要来看看[Profile](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/profile/profile.go)是个什么
+首先我们要来看看 [Profile](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/profile/profile.go) 是个什么
 
 ```go
 // Profile is a scheduling profile.
@@ -987,11 +985,11 @@ type Profile struct {
 }
 ```
 
-可以看到它扩展了framework.Framework，所以它支持所有framework.Framework的成员函数。而Profile和FrameWork绑定是通过调用NewMap()函数进行的它将config.KubeSchedulerProfile绑定到了FrameWork中，这一步也是在调用create的时候执行的。
+可以看到它扩展了 framework.Framework，所以它支持所有 framework.Framework 的成员函数。而 Profile 和 FrameWork 绑定是通过调用 NewMap() 函数进行的它将 config.KubeSchedulerProfile 绑定到了 FrameWork 中，这一步也是在调用 create 的时候执行的。
 
-通过上面分析，可以看出，上面那些RunXXX都是Profile从framework.Framework继承来的成员函数。所以下面的分析就直接进入framework.Framework的相关函数进行分析。
+通过上面分析，可以看出，上面那些 RunXXX 都是 Profile 从 framework.Framework 继承来的成员函数。所以下面的分析就直接进入 framework.Framework 的相关函数进行分析。
 
-首先来看看Framework的实现类
+首先来看看 Framework 的实现类
 
 ```go
 // framework is the component responsible for initializing and running scheduler
@@ -1025,9 +1023,9 @@ type framework struct {
 }
 ```
 
-可以看到framework这个结构里面包含了所有Plugin。如果我们想要实现一个自定义的scheduler，那我们就需要实现其中部分你要想的Plugin的接口。
+可以看到 framework 这个结构里面包含了所有 Plugin。如果我们想要实现一个自定义的 scheduler，那我们就需要实现其中部分你要想的 Plugin 的接口。
 
-再来看看[prof.RunPreFilterPlugins](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/framework/v1alpha1/framework.go#L316)
+再来看看 [prof.RunPreFilterPlugins](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/framework/v1alpha1/framework.go#L316)
 
 ```go
 func (f *framework) RunPreFilterPlugins(ctx context.Context, state *CycleState, pod *v1.Pod) (status *Status) {
@@ -1063,9 +1061,9 @@ func (f *framework) runPreFilterPlugin(ctx context.Context, pl PreFilterPlugin, 
 }
 ```
 
-这里就可以看到最后调用的是PreFilterPlugin的PreFilter函数。其他的函数基本上都是处理下逻辑，最后调用到实现的各种Plugin接口的实现。
+这里就可以看到最后调用的是 PreFilterPlugin 的 PreFilter 函数。其他的函数基本上都是处理下逻辑，最后调用到实现的各种 Plugin 接口的实现。
 
-下面在讲下如果在sched.Algorithm.Schedule失败的时候，如果抢占机制enabled的话，是如何进行抢占的,主要逻辑在[preempt](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/scheduler.go#L392)函数中。
+下面在讲下如果在 sched.Algorithm.Schedule 失败的时候，如果抢占机制 enabled 的话，是如何进行抢占的，主要逻辑在 [preempt](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/scheduler.go#L392) 函数中。
 
 ```go
 // preempt tries to create room for a pod that has failed to schedule, by preempting lower priority pods if possible.
@@ -1129,8 +1127,8 @@ func (sched *Scheduler) preempt(ctx context.Context, prof *profile.Profile, stat
 }
 ```
 
-上面函数主要通过sched.Algorithm.Preempt()函数进行推算是否可以抢占成功，如果抢占成功，将把这个schedule失败的pod放到NominatedPod Queue中，并在pod中设置NominatedNodeName，然后驱逐掉被抢占的pod。
-下面来看看[sched.Algorithm.Preempt()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/core/generic_scheduler.go#L270)具体实现。
+上面函数主要通过 sched.Algorithm.Preempt() 函数进行推算是否可以抢占成功，如果抢占成功，将把这个 schedule 失败的 pod 放到 NominatedPod Queue 中，并在 pod 中设置 NominatedNodeName，然后驱逐掉被抢占的 pod。
+下面来看看 [sched.Algorithm.Preempt()](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/scheduler/core/generic_scheduler.go#L270) 具体实现。
 
 ```go
 // preempt finds nodes with pods that can be preempted to make room for "pod" to
@@ -1205,6 +1203,6 @@ func (g *genericScheduler) Preempt(ctx context.Context, prof *profile.Profile, s
 
 就是调用一堆条件判断 是不是能够抢占成功。这里就不对每个函数进行展开说明了。
 
-好了，至此，scheduler的源码基本分析完了。由于篇幅问题和本人目前还没有太深入了解，所以此篇分析也就是很宽泛的点到为止了。所以其中很多内容，并没有提到。
+好了，至此，scheduler 的源码基本分析完了。由于篇幅问题和本人目前还没有太深入了解，所以此篇分析也就是很宽泛的点到为止了。所以其中很多内容，并没有提到。
 
 所以不对的地方还请指出，感兴趣的同学们，可以和我一起学习探讨！

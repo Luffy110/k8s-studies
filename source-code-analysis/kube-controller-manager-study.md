@@ -1,8 +1,8 @@
-# kube-controller-manager 源码分析(基于release-1.18 branch)
+# kube-controller-manager 源码分析（基于 release-1.18 branch)
 
-**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//..................代替了.**
+**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//.................. 代替了。**
 
-## 函数入口在[controller-manager.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/controller-manager.go)
+## 函数入口在 [controller-manager.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/controller-manager.go)
 
 ``` golang
 func main() {
@@ -23,9 +23,9 @@ func main() {
 }
 ```
 
-## 进入[NewControllerManagerCommand](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L92:6)看下实现细节
+## 进入 [NewControllerManagerCommand](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L92:6) 看下实现细节
 
-看到用的是[cobra](https://github.com/spf13/cobra)的库(一个非常牛的CLI的库，在很多项目中都有使用，这里不讲cobra具体怎么使用)。这里定义了一个函数赋值给了cobra.Commnad的Run成员函数接口，它将在main函数中调用command.Execute()后被执行。
+看到用的是 [cobra](https://github.com/spf13/cobra) 的库（一个非常牛的 CLI 的库，在很多项目中都有使用，这里不讲 cobra 具体怎么使用）。这里定义了一个函数赋值给了 cobra.Commnad 的 Run 成员函数接口，它将在 main 函数中调用 command.Execute() 后被执行。
 
 ```go
 // NewControllerManagerCommand creates a *cobra.Command object with default parameters
@@ -65,8 +65,7 @@ controller, and serviceaccounts controller.`,
 }
 ```
 
-然后这个函数中调到了真正的Run函数，这个函数里面才是进行真正的启动kube-controller-manager的逻辑处理.
-
+然后这个函数中调到了真正的 Run 函数，这个函数里面才是进行真正的启动 kube-controller-manager 的逻辑处理。
 ```go
 // Run runs the KubeControllerManagerOptions.  This should never exit.
 func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
@@ -108,7 +107,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
     }
 
     run := func(ctx context.Context) {
-        // 判断使用哪种client，simple client or dynamic client
+        // 判断使用哪种 client，simple client or dynamic client
         rootClientBuilder := controller.SimpleControllerClientBuilder{
             ClientConfig: c.Kubeconfig,
         }
@@ -149,7 +148,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
             klog.Fatalf("error starting controllers: %v", err)
         }
 
-        // Start informers,开始接收相应的事件
+        // Start informers, 开始接收相应的事件
         controllerContext.InformerFactory.Start(controllerContext.Stop)
         controllerContext.ObjectOrMetadataInformerFactory.Start(controllerContext.Stop)
         close(controllerContext.InformersStarted)
@@ -201,7 +200,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 }
 ```
 
-再看下StartControllers和NewControllerInitializers 函数的具体实现，就能看出它是如何把每个controller都调用起来的。
+再看下 StartControllers 和 NewControllerInitializers 函数的具体实现，就能看出它是如何把每个 controller 都调用起来的。
 
 ```go
 func StartControllers(ctx ControllerContext, startSATokenController InitFunc, controllers map[string]InitFunc, unsecuredMux *mux.PathRecorderMux) error {
@@ -226,7 +225,7 @@ func StartControllers(ctx ControllerContext, startSATokenController InitFunc, co
         time.Sleep(wait.Jitter(ctx.ComponentConfig.Generic.ControllerStartInterval.Duration, ControllerStartJitter))
 
         klog.V(1).Infof("Starting %q", controllerName)
-        // 这里的initFn 就是NewControllerInitializers 函数返回的每个InitFunc，也就是每个资源的startXXXController函数。
+        // 这里的 initFn 就是 NewControllerInitializers 函数返回的每个 InitFunc，也就是每个资源的 startXXXController 函数。
         debugHandler, started, err := initFn(ctx)
         if err != nil {
             klog.Errorf("Error starting %q", controllerName)
@@ -294,7 +293,7 @@ func NewControllerInitializers(loopMode ControllerLoopMode) map[string]InitFunc 
 }
 ```
 
-好了，下面在以deployment为例，进行深入分析。我们再进入[startDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/apps.go#L82:6)看下这里，到底做了什么。
+好了，下面在以 deployment 为例，进行深入分析。我们再进入 [startDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/apps.go#L82:6) 看下这里，到底做了什么。
 
 ```go
 func startDeploymentController(ctx ControllerContext) (http.Handler, bool, error) {
@@ -315,11 +314,11 @@ func startDeploymentController(ctx ControllerContext) (http.Handler, bool, error
 }
 ```
 
-大家肯定知道，现在创建一个deployment,它将会自己创建对应的replicaset和对应的desired个数的pod。所以deployment的controller 同时要实现deployment，replicaset和pod的controller。从上面的NewDeploymentController函数中，也确实能看到这点。
+大家肯定知道，现在创建一个 deployment, 它将会自己创建对应的 replicaset 和对应的 desired 个数的 pod。所以 deployment 的 controller 同时要实现 deployment，replicaset 和 pod 的 controller。从上面的 NewDeploymentController 函数中，也确实能看到这点。
 
-再进去[NewDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L101:6)，看看它又是做了什么呢！
+再进去 [NewDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L101:6)，看看它又是做了什么呢！
 
-其实到了这里，如果大家有研究过k8s提供的client-go(大家可以参考这个官方例子[workqueue](https://github.com/kubernetes/client-go/blob/master/examples/workqueue/main.go))的话，就很容易看懂每个具体的controller了，因为它们都是按照同样的框架写的。
+其实到了这里，如果大家有研究过 k8s 提供的 client-go（大家可以参考这个官方例子 [workqueue](https://github.com/kubernetes/client-go/blob/master/examples/workqueue/main.go)) 的话，就很容易看懂每个具体的 controller 了，因为它们都是按照同样的框架写的。
 
 ```go
 // NewDeploymentController creates a new DeploymentController.
@@ -371,9 +370,9 @@ func NewDeploymentController(dInformer appsinformers.DeploymentInformer, rsInfor
 }
 ```
 
-这里就是通过重写资源的Add,Update,Delete 的事件处理逻辑，就能实现当资源产生这些事件时，这些handler就会被执行。但是由于这里实现了workqueue的机制，你将会发现，这里的handler都是往一个queue里面装，然后真正从queue里面取事件，然后执行的是syncHandler这个函数接口，在上面函数里，可以看到，它其实指向了dc.syncDeployment这个函数，也就是说，最后真正执行逻辑处理的是这个函数。
+这里就是通过重写资源的 Add,Update,Delete 的事件处理逻辑，就能实现当资源产生这些事件时，这些 handler 就会被执行。但是由于这里实现了 workqueue 的机制，你将会发现，这里的 handler 都是往一个 queue 里面装，然后真正从 queue 里面取事件，然后执行的是 syncHandler 这个函数接口，在上面函数里，可以看到，它其实指向了 dc.syncDeployment 这个函数，也就是说，最后真正执行逻辑处理的是这个函数。
 
-所以具体的处理逻辑在这个[syncDeployment](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L563:33)函数中。
+所以具体的处理逻辑在这个 [syncDeployment](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L563:33) 函数中。
 
 ```go
 func (dc *DeploymentController) syncDeployment(key string) error {
@@ -387,7 +386,7 @@ func (dc *DeploymentController) syncDeployment(key string) error {
     if err != nil {
         return err
     }
-    // 获取指定namespace 和name 的deployment
+    // 获取指定 namespace 和 name 的 deployment
     deployment, err := dc.dLister.Deployments(namespace).Get(name)
     if errors.IsNotFound(err) {
         klog.V(2).Infof("Deployment %v has been deleted", key)
@@ -411,12 +410,12 @@ func (dc *DeploymentController) syncDeployment(key string) error {
         return nil
     }
 
-    // 获取这个deployment下的replicaset
+    // 获取这个 deployment 下的 replicaset
     rsList, err := dc.getReplicaSetsForDeployment(d)
     if err != nil {
         return err
     }
-    // 列出deployment下replicaset产生的pod
+    // 列出 deployment 下 replicaset 产生的 pod
     podMap, err := dc.getPodMapForDeployment(d, rsList)
     if err != nil {
         return err
@@ -444,7 +443,7 @@ func (dc *DeploymentController) syncDeployment(key string) error {
         return dc.rollback(d, rsList)
     }
 
-    // check 这里是不是需要scaling操作
+    // check 这里是不是需要 scaling 操作
     scalingEvent, err := dc.isScalingEvent(d, rsList)
     if err != nil {
         return err
@@ -464,7 +463,7 @@ func (dc *DeploymentController) syncDeployment(key string) error {
 }
 ```
 
-上面通过[isScalingEvent](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L529:33)判断是不是需要进行同步更新的操作，如果需要，则调用[sync](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L49) 进行同步。
+上面通过 [isScalingEvent](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L529:33) 判断是不是需要进行同步更新的操作，如果需要，则调用 [sync](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L49) 进行同步。
 
 ```go
 // isScalingEvent checks whether the provided deployment has been updated with a scaling event
@@ -515,7 +514,7 @@ func (dc *DeploymentController) sync(d *apps.Deployment, rsList []*apps.ReplicaS
 }
 ```
 
-最后就是调用[scale](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L298:33)进行scale up 或者scale down.
+最后就是调用 [scale](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L298:33) 进行 scale up 或者 scale down.
 
 ## Reference
 

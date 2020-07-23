@@ -1,31 +1,31 @@
-# k8s client-go informer 源码分析(基于release-1.18 branch)
+# k8s client-go informer 源码分析（基于 release-1.18 branch)
 
-**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//..................代替了.**
+**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//.................. 代替了。**
 
-在正式开始之前，我们回顾下上次[kube-controller-mananger](kube-controller-manager-study.md)的分析。在上一篇中，我们只分析了各种controller从workqueue中取数据，然后进行消费。但是并没有介绍这个workqueue中的数据的生产者是谁！它们是怎么从api-server那里收到的！
+在正式开始之前，我们回顾下上次 [kube-controller-mananger](kube-controller-manager-study.md) 的分析。在上一篇中，我们只分析了各种 controller 从 workqueue 中取数据，然后进行消费。但是并没有介绍这个 workqueue 中的数据的生产者是谁！它们是怎么从 api-server 那里收到的！
 
 这篇将详细的讲解下这其中的机制。
 
-## informer的实现机制
+## informer 的实现机制
 
-阅读源码之前，一定要知道informer的实现机制，不然不太好理解。因为这里面还是挺复杂的。informer主要是通过list-watch的的机制对k8s各种资源进行事件监听，然后实现快速的进行事件同步。下面我把informer的机制流图贴出来，以便后面分析代码的时候进行参照。
-下图来源k8s 官方例子sample-controller 的文档[controller-client-go](https://github.com/kubernetes/sample-controller/blob/master/docs/controller-client-go.md).
+阅读源码之前，一定要知道 informer 的实现机制，不然不太好理解。因为这里面还是挺复杂的。informer 主要是通过 list-watch 的的机制对 k8s 各种资源进行事件监听，然后实现快速的进行事件同步。下面我把 informer 的机制流图贴出来，以便后面分析代码的时候进行参照。
+下图来源 k8s 官方例子 sample-controller 的文档 [controller-client-go](https://github.com/kubernetes/sample-controller/blob/master/docs/controller-client-go.md).
 
 ![informer](images/informer.png)
 
 图中各部分的详细说明，官方例子中的文档有详细说明，此处就不在赘述了！
 
-在开始代码之前，我把client-go informer的类图展示一下，方便下面代码理解更加方便。由于为了类图看起来简洁，我把storage的部分分离开了，所以看的时候，要结合下面两张图能够更好的理解。或者查看[整个的类图](images/informerall.png).
+在开始代码之前，我把 client-go informer 的类图展示一下，方便下面代码理解更加方便。由于为了类图看起来简洁，我把 storage 的部分分离开了，所以看的时候，要结合下面两张图能够更好的理解。或者查看 [整个的类图](images/informerall.png).
 
-这个是整个informer的类图:
+这个是整个 informer 的类图：
 ![informerclassdiagram](images/informerclassdiagram.png)
 
-这个是indexer和DeltaFIFO的类图:
+这个是 indexer 和 DeltaFIFO 的类图：
 ![storageclassdiagram](images/storageclassdiagram.png)
 
 ## kube-controller-manager 回顾
 
-上次在讲解controller的时候，我们直接跳过了这部分代码。今天我就补下这部分的内容，然后再慢慢的进入到client-go的源码中。不然以上来就分析，也不太好将client-go和controller关联起来。
+上次在讲解 controller 的时候，我们直接跳过了这部分代码。今天我就补下这部分的内容，然后再慢慢的进入到 client-go 的源码中。不然以上来就分析，也不太好将 client-go 和 controller 关联起来。
 
 上次我们看到过这部分的代码：
 
@@ -38,13 +38,13 @@ saTokenControllerInitFunc := serviceAccountTokenControllerStarter{rootClientBuil
 if err := StartControllers(controllerContext, saTokenControllerInitFuncNewControllerInitializers(controllerContext.LoopMode), unsecuredMux); err != nil {
     klog.Fatalf("error starting controllers: %v", err)
 
-// Start informers,开始接收相应的事件
+// Start informers, 开始接收相应的事件
 controllerContext.InformerFactory.Start(controllerContext.Stop)
 controllerContext.ObjectOrMetadataInformerFactory.Start(controllerContext.Stop)
 close(controllerContext.InformersStarted)
 ```
 
-这里我们讲下CreateControllerContext函数具体做了些什么呢！
+这里我们讲下 CreateControllerContext 函数具体做了些什么呢！
 
 ```go
 // CreateControllerContext creates a context struct containing references to resources needed by the
@@ -52,11 +52,11 @@ close(controllerContext.InformersStarted)
 // the shared-informers client and token controller.
 func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clientBuilder controller.ControllerClientBuilder, stop <-chan struct{}) (ControllerContext, error) {
     versionedClient := rootClientBuilder.ClientOrDie("shared-informers")
-    // 这里用NewSharedInformerFactory接口创建了个sharedInformers
+    // 这里用 NewSharedInformerFactory 接口创建了个 sharedInformers
     sharedInformers := informers.NewSharedInformerFactory(versionedClient, ResyncPeriod(s)())
 
     metadataClient := metadata.NewForConfigOrDie(rootClientBuilder.ConfigOrDie("metadata-informers"))
-    // 这里用NewSharedInformerFactory接口创建了个metadataInformers
+    // 这里用 NewSharedInformerFactory 接口创建了个 metadataInformers
     metadataInformers := metadatainformer.NewSharedInformerFactory(metadataClient, ResyncPeriod(s)())
 
     // If apiserver is not running we should wait for some time and fail only then. This is particularly
@@ -84,13 +84,13 @@ func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clien
 }
 ```
 
-从上面看来，CreateControllerContext函数创建了sharedInformers和metadataInformers这两个sharedInformer。
+从上面看来，CreateControllerContext 函数创建了 sharedInformers 和 metadataInformers 这两个 sharedInformer。
 
-有些同学就会问什么是sharedInformer呢？其实这里开始是没有shared informer的概念的。开始只有单个object的informer，比如pod informer，job informer等。但是后来，有很多object其实有些依赖关系的，比如deployment 就同时需要监听replicaset和pod的。按照之前的架构，那就会有很多这种相同的object informer在工作，之间相互独立，且浪费资源。后来为了避免这些问题，就有了shared informer。顾名思义，就是很多个object 可以共享一个informer。比如deployment的pod的informer就和replicaset的pod的informer重用了。
+有些同学就会问什么是 sharedInformer 呢？其实这里开始是没有 shared informer 的概念的。开始只有单个 object 的 informer，比如 pod informer，job informer 等。但是后来，有很多 object 其实有些依赖关系的，比如 deployment 就同时需要监听 replicaset 和 pod 的。按照之前的架构，那就会有很多这种相同的 object informer 在工作，之间相互独立，且浪费资源。后来为了避免这些问题，就有了 shared informer。顾名思义，就是很多个 object 可以共享一个 informer。比如 deployment 的 pod 的 informer 就和 replicaset 的 pod 的 informer 重用了。
 
-好了，言归正传，下面从[NewSharedInformerFactory](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/informers/factory.go)这个函数入手，进行分析client-go的informer到底是怎么按照上面flow进行工作的！
+好了，言归正传，下面从 [NewSharedInformerFactory](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/informers/factory.go) 这个函数入手，进行分析 client-go 的 informer 到底是怎么按照上面 flow 进行工作的！
 
-这里其实在文件开头可以看到，这些文件都是用informer-gen生成的。详细使用可参考[k8s code-generator](https://github.com/kubernetes/code-generator)
+这里其实在文件开头可以看到，这些文件都是用 informer-gen 生成的。详细使用可参考 [k8s code-generator](https://github.com/kubernetes/code-generator)
 
 ```go
 type sharedInformerFactory struct {
@@ -160,7 +160,7 @@ func NewSharedInformerFactoryWithOptions(client kubernetes.Interface, defaultRes
 }
 ```
 
-可以看到sharedInformerFactory中的informers是一个map，key是一个反射类型，value是一个SharedIndexInformer。从SharedInformerFactory这个接口可以看到，client-go已经预先实现了各种informer了。可以通过相应的apiversion进行调用，或者使用下面InformerFor函数添加。
+可以看到 sharedInformerFactory 中的 informers 是一个 map，key 是一个反射类型，value 是一个 SharedIndexInformer。从 SharedInformerFactory 这个接口可以看到，client-go 已经预先实现了各种 informer 了。可以通过相应的 apiversion 进行调用，或者使用下面 InformerFor 函数添加。
 
 ```go
 // InternalInformerFor returns the SharedIndexInformer for obj using an internal
@@ -200,9 +200,9 @@ func (f *sharedInformerFactory) Start(stopCh <-chan struct{}) {
 }
 ```
 
-然后看到InformerFor这个函数就是将具体的informer加到上面那个map中。然后通过Start函数将这些informer都异步调用起来。
+然后看到 InformerFor 这个函数就是将具体的 informer 加到上面那个 map 中。然后通过 Start 函数将这些 informer 都异步调用起来。
 
-好了，再以deployment为例，在看看startDeploymentController和NewDeploymentController的时候干了什么。
+好了，再以 deployment 为例，在看看 startDeploymentController 和 NewDeploymentController 的时候干了什么。
 
 ```go
 func startDeploymentController(ctx ControllerContext) (http.Handler, bool, error) {
@@ -298,13 +298,13 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 
 ```
 
-通过调用ctx.InformerFactory.Apps().V1().Deployments()将返回一个[DeploymentInformer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/informers/apps/v1/deployment.go)的interface。然后在NewDeploymentController中通过xxx.Informer()函数将调用到上面说到的InformerFor函数，将这个informer添加到shared informers的listeners中去。
+通过调用 ctx.InformerFactory.Apps().V1().Deployments() 将返回一个 [DeploymentInformer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/informers/apps/v1/deployment.go) 的 interface。然后在 NewDeploymentController 中通过 xxx.Informer() 函数将调用到上面说到的 InformerFor 函数，将这个 informer 添加到 shared informers 的 listeners 中去。
 
-可以看出在NewDeploymentInformer的时候调用了NewFilteredDeploymentInformer，然后调用client-go里面的cache.NewSharedIndexInformer创建了个SharedIndexInformer,并传入了listwatcher.
+可以看出在 NewDeploymentInformer 的时候调用了 NewFilteredDeploymentInformer，然后调用 client-go 里面的 cache.NewSharedIndexInformer 创建了个 SharedIndexInformer, 并传入了 listwatcher.
 
 ## SharedIndexInformer 分析
 
-好了，到这里我们终于要开始揭开client-go的面纱了。上面我们提到的[SharedIndexInformer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/shared_informer.go)，这个就是client-go实现的功能，那么我们现在开始从这里进行分析。
+好了，到这里我们终于要开始揭开 client-go 的面纱了。上面我们提到的 [SharedIndexInformer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/shared_informer.go)，这个就是 client-go 实现的功能，那么我们现在开始从这里进行分析。
 
 ```go
 // SharedIndexInformer provides add and get Indexers ability based on SharedInformer.
@@ -441,9 +441,9 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 
 ## Controller 分析
 
-从sharedIndexInformer的Run函数中，我们可以看到，它创建了个DeltaFiFOQueue赋值给了Config结构，然后在创建Controller的时候传了进去。然后开了两个线程分别做s.cacheMutationDetector.Run和s.processor.run， 然后再调用了s.controller.Run，
+从 sharedIndexInformer 的 Run 函数中，我们可以看到，它创建了个 DeltaFiFOQueue 赋值给了 Config 结构，然后在创建 Controller 的时候传了进去。然后开了两个线程分别做 s.cacheMutationDetector.Run 和 s.processor.run， 然后再调用了 s.controller.Run，
 
-我们再进入[controller.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/controller.go)看看controller的Run。
+我们再进入 [controller.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/controller.go) 看看 controller 的 Run。
 
 ```go
 // Config contains all the settings for one of these low-level controllers.
@@ -541,11 +541,11 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 
 ```
 
-从上面的controller的这个结构体的Run可以看到，它干了两件是，一个是创建了个Reflector，可以看到传入了一个ListerWatcher的实例和一个Queue,然后调用r.Run将其调用起来，另一个就是调用c.processLoop.
+从上面的 controller 的这个结构体的 Run 可以看到，它干了两件是，一个是创建了个 Reflector，可以看到传入了一个 ListerWatcher 的实例和一个 Queue, 然后调用 r.Run 将其调用起来，另一个就是调用 c.processLoop.
 
 ## Reflector 分析
 
-从上面的flow我们可以知道[Reflector](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/reflector.go)的工作就是从list-watch api server 的各种object，然后将各种事件添加到DeltaFIFOQueue中让informer去消费。那我们现在看看Reflector的实现：
+从上面的 flow 我们可以知道 [Reflector](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/reflector.go) 的工作就是从 list-watch api server 的各种 object，然后将各种事件添加到 DeltaFIFOQueue 中让 informer 去消费。那我们现在看看 Reflector 的实现：
 
 ```go
 // NewReflector creates a new Reflector object which will keep the
@@ -594,7 +594,7 @@ func (r *Reflector) Run(stopCh <-chan struct{}) {
 }
 ```
 
-上面可以看到在NewReflector的时候将ListerWatcher和queue传了过来，分别赋值给了listerWatcher和store.然后在调用Run的时候，就调用了ListAndWatch进行核心操作。
+上面可以看到在 NewReflector 的时候将 ListerWatcher 和 queue 传了过来，分别赋值给了 listerWatcher 和 store. 然后在调用 Run 的时候，就调用了 ListAndWatch 进行核心操作。
 
 ```go
 // ListAndWatch first lists all items and get the resource version at the moment of call,
@@ -849,13 +849,12 @@ loop:
 }
 ```
 
-上面就是Reflector的灵魂俩函数了。对于ListAndWatch，虽然代码很多，但是从注释上来看，也就是先list出所有object item,然后获取正在使用的版本，再去watch使用的版本object的变化事件。然后调用watchHandler进行无线循环的接收变化事件，并将各种接收到的事件放入到Store(也就是那个DeltaFIFOQueue)中.
-
-到这里我们知道了Reflector的工作方式了，那么它将事件放到Queue中，什么时候去处理呢？谁去处理呢？
+上面就是 Reflector 的灵魂俩函数了。对于 ListAndWatch，虽然代码很多，但是从注释上来看，也就是先 list 出所有 object item, 然后获取正在使用的版本，再去 watch 使用的版本 object 的变化事件。然后调用 watchHandler 进行无线循环的接收变化事件，并将各种接收到的事件放入到 Store（也就是那个 DeltaFIFOQueue) 中。
+到这里我们知道了 Reflector 的工作方式了，那么它将事件放到 Queue 中，什么时候去处理呢？谁去处理呢？
 
 ## Informer 分析
 
-下面就回到controller分析小节中，从上面我们知道一个线程就是无限的往Queue中加数据，另一个s.controller.Run 是干什么的？ 我想大家应该想到了。是的，它就是无限的循环在queue中取数据进行处理。下面我们就从[processLoop](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/controller.go#L171:22)开始分析！
+下面就回到 controller 分析小节中，从上面我们知道一个线程就是无限的往 Queue 中加数据，另一个 s.controller.Run 是干什么的？ 我想大家应该想到了。是的，它就是无限的循环在 queue 中取数据进行处理。下面我们就从 [processLoop](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/controller.go#L171:22) 开始分析！
 
 ```go
 // processLoop drains the work queue.
@@ -883,9 +882,9 @@ func (c *controller) processLoop() {
 }
 ```
 
-从代码中可以看到，它确实是这样对的，就是个死循环从Queue中读数据，然后调用Process进行处理。从sharedInfomer中我们分析下来，这个Queue就是在sharedIndexInformer.Run的时候创建的那个DeltaFIFOQueue，然后这个Process就是sharedIndexInformer的HandleDeltas。
+从代码中可以看到，它确实是这样对的，就是个死循环从 Queue 中读数据，然后调用 Process 进行处理。从 sharedInfomer 中我们分析下来，这个 Queue 就是在 sharedIndexInformer.Run 的时候创建的那个 DeltaFIFOQueue，然后这个 Process 就是 sharedIndexInformer 的 HandleDeltas。
 
-下面看看[HandleDeltas](https://github.com/kubernetes/kubernetes/blob/99df02cd4ad467279ed758674542cf9a2c042859/staging/src/k8s.io/client-go/tools/cache/shared_informer.go#L527:1)
+下面看看 [HandleDeltas](https://github.com/kubernetes/kubernetes/blob/99df02cd4ad467279ed758674542cf9a2c042859/staging/src/k8s.io/client-go/tools/cache/shared_informer.go#L527:1)
 
 ```go
 func (s *sharedIndexInformer) HandleDeltas(obj interface{}) error {
@@ -934,10 +933,10 @@ func (s *sharedIndexInformer) HandleDeltas(obj interface{}) error {
 }
 ```
 
-可以看到这个函数真是符合flow中的informer干的事，将从DeltaFIFOQueue中读到的各种事件，进行分发给custome controller和将变化的数据更新到indexer.
+可以看到这个函数真是符合 flow 中的 informer 干的事，将从 DeltaFIFOQueue 中读到的各种事件，进行分发给 custome controller 和将变化的数据更新到 indexer.
 
-下面看看它是怎么将事件分发给各种controller的。
-从上面sharedInformer 我们可看到在创建sharedIndexInformer的时候，我们创建了个sharedProcessor给了sharedIndexInformer的processor，
+下面看看它是怎么将事件分发给各种 controller 的。
+从上面 sharedInformer 我们可看到在创建 sharedIndexInformer 的时候，我们创建了个 sharedProcessor 给了 sharedIndexInformer 的 processor，
 
 ```go
 // sharedProcessor has a collection of processorListener and can
@@ -1007,9 +1006,9 @@ func (p *sharedProcessor) run(stopCh <-chan struct{}) {
 
 ```
 
-可以看出来，sharedProcessor维护了两个processorListener slice,一个listeners和一个syncingListeners。顾名思义，这两个区别就是一个是全集，一个是正在syncing的listeners。sharedProcessor提供了addListener向两个slice中添加listener，然后调用processorListene的run和pop方法。提供了distribute将数据添加到各种添加过的listeners。
+可以看出来，sharedProcessor 维护了两个 processorListener slice, 一个 listeners 和一个 syncingListeners。顾名思义，这两个区别就是一个是全集，一个是正在 syncing 的 listeners。sharedProcessor 提供了 addListener 向两个 slice 中添加 listener，然后调用 processorListene 的 run 和 pop 方法。提供了 distribute 将数据添加到各种添加过的 listeners。
 
-再看看processorListener做了什么？
+再看看 processorListener 做了什么？
 
 ```go
 // processorListener relays notifications from a sharedProcessor to
@@ -1118,15 +1117,15 @@ func (p *processorListener) run() {
 }
 ```
 
-看到这里，如果写过自己的controller的同学们是不是瞬间懂了。原来就是它提供了一个ResourceEventHandler给我们自己实现的啊！对，没错，就是这里，它提供了ResourceEventHandler这个interface给用户，并提供了三个函数OnAdd，OnUpdate，OnDelete接口。好了，从代码可以看出，它通过两个channel addCh，nextCh实现了两个go runtine 进行通信。add方法向addCh放数据，pop方法从addCh里面取数据放到nextCh，然后run 从nextCh里面取数据，给自定义的OnXXX函数进行处理。
+看到这里，如果写过自己的 controller 的同学们是不是瞬间懂了。原来就是它提供了一个 ResourceEventHandler 给我们自己实现的啊！对，没错，就是这里，它提供了 ResourceEventHandler 这个 interface 给用户，并提供了三个函数 OnAdd，OnUpdate，OnDelete 接口。好了，从代码可以看出，它通过两个 channel addCh，nextCh 实现了两个 go runtine 进行通信。add 方法向 addCh 放数据，pop 方法从 addCh 里面取数据放到 nextCh，然后 run 从 nextCh 里面取数据，给自定义的 OnXXX 函数进行处理。
 
-**NOTE**: 这里pop里面的实现逻辑有点不太好懂。我在这里详细的将一下。它定义了一个nextCh 只写channel，然后无限循环的从addCh里面读，当addCh里面放入了数据，这边pop就收到了数据，进入了第二个select case条件，此时notification肯定是个nil,然后就把收到的数据放到notification，然后把定义的局部的channel nextCh指向p.nextCh, 也就是说写入这个只写的channel 就写入了p.nextCh里面了，让run去处理。好了，当放到addCh里面的速度大于处理的速度，它就放到一个pendingNotifications (一个无限循buffer)。当所有事件处理完成，就又把nextCh channel设置成了nil,也就是disabled掉了这个select case了，然后当有数据了，就又开始这个逻辑循环。
+**NOTE**: 这里 pop 里面的实现逻辑有点不太好懂。我在这里详细的将一下。它定义了一个 nextCh 只写 channel，然后无限循环的从 addCh 里面读，当 addCh 里面放入了数据，这边 pop 就收到了数据，进入了第二个 select case 条件，此时 notification 肯定是个 nil, 然后就把收到的数据放到 notification，然后把定义的局部的 channel nextCh 指向 p.nextCh, 也就是说写入这个只写的 channel 就写入了 p.nextCh 里面了，让 run 去处理。好了，当放到 addCh 里面的速度大于处理的速度，它就放到一个 pendingNotifications （一个无限循 buffer)。当所有事件处理完成，就又把 nextCh channel 设置成了 nil, 也就是 disabled 掉了这个 select case 了，然后当有数据了，就又开始这个逻辑循环。
 
 ## Indexer 分析
 
-上面从Informer分析部分，可以看到在HandleDeltas的时候，也就数据更新到了indexer中了。下面就来分析下Indexer的代码。同理在创建SharedIndexInformer的时候将赋值这个indexer，但是sharedinformer提供了两种接口，NewSharedInformer和NewSharedIndexInformer，这两个前者是使用了一个默认的indexer，后者是使用了传入的indexer。
+上面从 Informer 分析部分，可以看到在 HandleDeltas 的时候，也就数据更新到了 indexer 中了。下面就来分析下 Indexer 的代码。同理在创建 SharedIndexInformer 的时候将赋值这个 indexer，但是 sharedinformer 提供了两种接口，NewSharedInformer 和 NewSharedIndexInformer，这两个前者是使用了一个默认的 indexer，后者是使用了传入的 indexer。
 
-在NewSharedIndexInformer 中将调用[NewIndexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/store.go#L261:6)的函数，创建一个indexer。从下面NewIndexer函数中可以看到，它其实是创建了个用线程安全的store实现的[Indexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/index.go)。
+在 NewSharedIndexInformer 中将调用 [NewIndexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/store.go#L261:6) 的函数，创建一个 indexer。从下面 NewIndexer 函数中可以看到，它其实是创建了个用线程安全的 store 实现的 [Indexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/index.go)。
 
 ```go
 // NewIndexer returns an Indexer implemented simply with a map and a lock.
@@ -1138,7 +1137,7 @@ func NewIndexer(keyFunc KeyFunc, indexers Indexers) Indexer {
 }
 ```
 
-先看看Store是个啥东西！
+先看看 Store 是个啥东西！
 
 ```go
 // Store is a generic object storage and processing interface.  A
@@ -1189,9 +1188,9 @@ type Store interface {
 }
 ```
 
-源码中的注释也说到了。这个Store是一个通用的object存储和处理的接口。然后实现了一系列接口的。
+源码中的注释也说到了。这个 Store 是一个通用的 object 存储和处理的接口。然后实现了一系列接口的。
 
-再来看看Indexer的结构。
+再来看看 Indexer 的结构。
 
 ```go
 // Indexer extends Store with multiple indices and restricts each
@@ -1227,9 +1226,9 @@ type Indexer interface {
 }
 ```
 
-源码中的注释也说到了。这个Indexer是一个扩展了带有多个索引的Store，并限制每个累加器只保存当前对象(删除后为空)。
+源码中的注释也说到了。这个 Indexer 是一个扩展了带有多个索引的 Store，并限制每个累加器只保存当前对象（删除后为空）。
 
-但是其实不管是Store还是Indexer，底层都是使用的[ThreadSafeStore](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/thread_safe_store.go),
+但是其实不管是 Store 还是 Indexer，底层都是使用的 [ThreadSafeStore](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/thread_safe_store.go),
 
 ```go
 // ThreadSafeStore is an interface that allows concurrent indexed
@@ -1269,7 +1268,7 @@ type ThreadSafeStore interface {
 }
 ```
 
-好了，由于client-go里面的代码讲起来实在太多了。由于篇幅原因。对于这部分后面可以再带大家一起分析下这部分的实现。
+好了，由于 client-go 里面的代码讲起来实在太多了。由于篇幅原因。对于这部分后面可以再带大家一起分析下这部分的实现。
 
 ## References
 

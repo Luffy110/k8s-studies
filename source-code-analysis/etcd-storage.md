@@ -1,8 +1,8 @@
-# ETCD Storage 源码分析(基于release-1.18 branch)
+# ETCD Storage 源码分析（基于 release-1.18 branch)
 
-**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//..................代替了.**
+**NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//.................. 代替了。**
 
-**NOTE: 由于ApiServer的功能比较多，代码量也不小，且ApiServer是k8s中唯一能访问ETCD的组件，并且k8s将这部分代码从源代码中分离开来到apiserver这个repo下了，所以这次我将它单独拿来分析下。所以我们接下来开始阅读k8s对于ETCD的相关访问的源码.**
+**NOTE: 由于 ApiServer 的功能比较多，代码量也不小，且 ApiServer 是 k8s 中唯一能访问 ETCD 的组件，并且 k8s 将这部分代码从源代码中分离开来到 apiserver 这个 repo 下了，所以这次我将它单独拿来分析下。所以我们接下来开始阅读 k8s 对于 ETCD 的相关访问的源码。**
 
 ## 代码框架
 
@@ -14,11 +14,11 @@ TODO: here will put an etcd storage architecture picture.
 
 ## 源码分析
 
-### RestfulStorage分析
+### RestfulStorage 分析
 
-首先我们还是从kubernetes源码中说起，k8s中的每种资源都对外提供的是Restful的接口，代码主要在[register](https://github.com/kubernetes/kubernetes/tree/release-1.18/pkg/registry)，点进去看的同学们都应该看的到，所有的资源Restful的接口都在这里。下面我将以deployment为例，来分析k8s的storage的接口实现。
+首先我们还是从 kubernetes 源码中说起，k8s 中的每种资源都对外提供的是 Restful 的接口，代码主要在 [register](https://github.com/kubernetes/kubernetes/tree/release-1.18/pkg/registry)，点进去看的同学们都应该看的到，所有的资源 Restful 的接口都在这里。下面我将以 deployment 为例，来分析 k8s 的 storage 的接口实现。
 
-大家都知道deployment是属于apps组下面的，所以点进register/apps目录下，大家会看到apps下面的资源的restful的接口都在这里，然后还有一个rest的目录，将这些资源全部通过一个[NewRESTStorage](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/rest/storage_apps.go#L36)函数实例化出来了。
+大家都知道 deployment 是属于 apps 组下面的，所以点进 register/apps 目录下，大家会看到 apps 下面的资源的 restful 的接口都在这里，然后还有一个 rest 的目录，将这些资源全部通过一个 [NewRESTStorage](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/rest/storage_apps.go#L36) 函数实例化出来了。
 
 ```go
 type RESTStorageProvider struct{}
@@ -91,7 +91,7 @@ func (p RESTStorageProvider) v1Storage(apiResourceConfigSource serverstorage.API
 
 其他的资源也都是一样的结构。此处不过多描述。
 
-上面我们看到创建deployment实例的时候是调用了deploymentstore.NewStorage(restOptionsGetter)这个函数。下面我们继续看看deployment这个[NewStorage](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/storage/storage.go#L56)函数的源码。
+上面我们看到创建 deployment 实例的时候是调用了 deploymentstore.NewStorage(restOptionsGetter) 这个函数。下面我们继续看看 deployment 这个 [NewStorage](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/storage/storage.go#L56) 函数的源码。
 
 首先我们来看看这个函数内容
 
@@ -111,7 +111,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter) (DeploymentStorage, error)
 }
 ```
 
-这个函数中就是调用了NewREST创建了几个Rest的实例并构建了个DeploymentStorage的对象，然后我们来看看这个构建的对象的结构内容。
+这个函数中就是调用了 NewREST 创建了几个 Rest 的实例并构建了个 DeploymentStorage 的对象，然后我们来看看这个构建的对象的结构内容。
 
 ```go
 // DeploymentStorage includes dummy storage for Deployments and for Scale subresource.
@@ -124,9 +124,9 @@ type DeploymentStorage struct {
 
 ```
 
-这个结构里面包含了deployment资源及其子资源的Restful的接口。
+这个结构里面包含了 deployment 资源及其子资源的 Restful 的接口。
 
-下面我们来看看REST,StatusREST，RollbackREST和ScaleREST这四个结构体。
+下面我们来看看 REST,StatusREST，RollbackREST 和 ScaleREST 这四个结构体。
 
 ```go
 type REST struct {
@@ -150,10 +150,10 @@ type ScaleREST struct {
 
 ```
 
-从上面看得出来，除了REST这个结构体是有一个genericregistry.Store的匿名指针变量外，其他三个都是有一个genericregistry.Store的指针变量。
-**NOTE:这里讲下匿名变量和正常变量的区别，首先匿名变量，顾名思义，这个变量是没有名字的，它有什么好处呢？golang中的匿名变量可以使得包含这个变量的结构体或者接口都可以直接使用这个变量的函数或者接口。而正常的变量做不到这点，如果想要访问带名变量的函数或者接口等，就必须要通过这个变量的名字。从这里的源码来看，匿名变量带来的好处就是REST这个结构体可以直接使用genericregistry.Store的函数或者接口了。而其他三个结构体就必须在封装一层。这里或许是考虑了REST这个结构体有这和Store一样的接口，所以不需要再来封装一层，而其他三个结构体只需要Store的部分接口，所以封装一层从而使得不对外暴露不需要的接口。**
+从上面看得出来，除了 REST 这个结构体是有一个 genericregistry.Store 的匿名指针变量外，其他三个都是有一个 genericregistry.Store 的指针变量。
+**NOTE: 这里讲下匿名变量和正常变量的区别，首先匿名变量，顾名思义，这个变量是没有名字的，它有什么好处呢？golang 中的匿名变量可以使得包含这个变量的结构体或者接口都可以直接使用这个变量的函数或者接口。而正常的变量做不到这点，如果想要访问带名变量的函数或者接口等，就必须要通过这个变量的名字。从这里的源码来看，匿名变量带来的好处就是 REST 这个结构体可以直接使用 genericregistry.Store 的函数或者接口了。而其他三个结构体就必须在封装一层。这里或许是考虑了 REST 这个结构体有这和 Store 一样的接口，所以不需要再来封装一层，而其他三个结构体只需要 Store 的部分接口，所以封装一层从而使得不对外暴露不需要的接口。**
 
-下面再来具体看看[NewREST](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/storage/storage.go#L76)这个函数。
+下面再来具体看看 [NewREST](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/storage/storage.go#L76) 这个函数。
 
 ```go
 // NewREST returns a RESTStorage object that will work against deployments.
@@ -180,13 +180,13 @@ func NewREST(optsGetter generic.RESTOptionsGetter) (*REST, *StatusREST, *Rollbac
 }
 ```
 
-这个函数也好理解，就是先实例化了genericregistry.Store，然后在实例化了返回值中的三个结构体。这里有一个地方需要讲一下，就是Strategy，这部分代码在[Strategy](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/strategy.go)，大家从上面那张框架图就可以看到Strategy其实是丰富了RegisterStore这层的行为。通俗点讲就是在真正执行操作之前或者后做哪些处理。这其实有点类似装饰者模式的。
+这个函数也好理解，就是先实例化了 genericregistry.Store，然后在实例化了返回值中的三个结构体。这里有一个地方需要讲一下，就是 Strategy，这部分代码在 [Strategy](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/strategy.go)，大家从上面那张框架图就可以看到 Strategy 其实是丰富了 RegisterStore 这层的行为。通俗点讲就是在真正执行操作之前或者后做哪些处理。这其实有点类似装饰者模式的。
 
-### RegisterStore分析
+### RegisterStore 分析
 
-**NOTE: 下面的源码大家可以在kubernetes的源码的vendor看，也可以找到apiserver这个repo去阅读。下面我是从apiserver这个独立的repo分析的。所以其中的链接都是会链到那边去的。**
+**NOTE: 下面的源码大家可以在 kubernetes 的源码的 vendor 看，也可以找到 apiserver 这个 repo 去阅读。下面我是从 apiserver 这个独立的 repo 分析的。所以其中的链接都是会链到那边去的。**
 
-下面我们真正的开始今天的主题，首先从[genericregistry.Store](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/generic/registry/store.go)。
+下面我们真正的开始今天的主题，首先从 [genericregistry.Store](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/generic/registry/store.go)。
 
 ```go
 type Store struct {
@@ -222,8 +222,8 @@ type Store struct {
 
 ```
 
-上面我截取了Store结构体中比较重要的变量来进行分析。从代码中也可以看到，Store实现了4种Strategy，CreateStrategy，UpdateStrategy，DeleteStrategy和ExportStrategy。
-然后它实现了下面这个interface的接口去获取这四类Strategy. (其实这里我有一点疑惑，就是为什么都重写了GenericStore的接口去获取Strategy，为啥这四个变量还用大写去暴露出去呢？)
+上面我截取了 Store 结构体中比较重要的变量来进行分析。从代码中也可以看到，Store 实现了 4 种 Strategy，CreateStrategy，UpdateStrategy，DeleteStrategy 和 ExportStrategy。
+然后它实现了下面这个 interface 的接口去获取这四类 Strategy. （其实这里我有一点疑惑，就是为什么都重写了 GenericStore 的接口去获取 Strategy，为啥这四个变量还用大写去暴露出去呢？)
 
 ```go
 // GenericStore interface can be used for type assertions when we need to access the underlying strategies.
@@ -255,16 +255,16 @@ func (e *Store) GetExportStrategy() rest.RESTExportStrategy {
 }
 ```
 
-然后Store还有三种操作资源对象后的操作，AfterCreate，AfterUpdate和AfterDelete。分别就是创建资源后，更新资源后和删除资源后的操作。
+然后 Store 还有三种操作资源对象后的操作，AfterCreate，AfterUpdate 和 AfterDelete。分别就是创建资源后，更新资源后和删除资源后的操作。
 
-最后最主要的部分就是Storage，通过注释可以看到DryRunnableStorage这个是对底层Storage的interface的一层封装。
+最后最主要的部分就是 Storage，通过注释可以看到 DryRunnableStorage 这个是对底层 Storage 的 interface 的一层封装。
 
-这里以Create的函数为例，
+这里以 Create 的函数为例，
 
 ```go
 // Create inserts a new item according to the unique key from the object.
 func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
-    // create之前做些预处理
+    // create 之前做些预处理
     if err := rest.BeforeCreate(e.CreateStrategy, ctx, obj); err != nil {
         return nil, err
     }
@@ -290,7 +290,7 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
         return nil, err
     }
     out := e.NewFunc()
-    // 调用Storage 的create的方法执行create操作
+    // 调用 Storage 的 create 的方法执行 create 操作
     if err := e.Storage.Create(ctx, key, obj, out, ttl, dryrun.IsDryRun(options.DryRun)); err != nil {
         err = storeerr.InterpretCreateError(err, qualifiedResource, name)
         err = rest.CheckGeneratedNameError(e.CreateStrategy, err, obj)
@@ -310,7 +310,7 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
         }
         return nil, err
     }
-    //create之后做些善后处理
+    //create 之后做些善后处理
     if e.AfterCreate != nil {
         if err := e.AfterCreate(out); err != nil {
             return nil, err
@@ -327,7 +327,7 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
 }
 ```
 
-依照顺序，我们先来看看[rest.BeforeCreate(e.CreateStrategy, ctx, obj)](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/rest/create.go#L74)。从BeforeCreate函数的传入参数可以看得出，是把Store的CreateStrategy传入了。下面我们来从源码中看看，传入的这个CreateStrategy做什么用的。
+依照顺序，我们先来看看 [rest.BeforeCreate(e.CreateStrategy, ctx, obj)](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/rest/create.go#L74)。从 BeforeCreate 函数的传入参数可以看得出，是把 Store 的 CreateStrategy 传入了。下面我们来从源码中看看，传入的这个 CreateStrategy 做什么用的。
 
 ```go
 // BeforeCreate ensures that common operations for all resources are performed on creation. It only returns
@@ -381,7 +381,7 @@ func BeforeCreate(strategy RESTCreateStrategy, ctx context.Context, obj runtime.
 }
 ```
 
-这部分代码可以看到传入的第一个参数是一个RESTCreateStrategy的类型的变量。然后执行传入的这个参数的一系列操作。从上面我们知道这个传入的参数是一个CreateStrategy，所以里面执行的都是这个CreateStrategy的相关操作。而从参数类型来看，RESTCreateStrategy肯定是一个接口类型。那就是说CreateStrategy实现了RESTCreateStrategy相关方法。那么下面我们来看看RESTCreateStrategy这个接口有哪些方法。
+这部分代码可以看到传入的第一个参数是一个 RESTCreateStrategy 的类型的变量。然后执行传入的这个参数的一系列操作。从上面我们知道这个传入的参数是一个 CreateStrategy，所以里面执行的都是这个 CreateStrategy 的相关操作。而从参数类型来看，RESTCreateStrategy 肯定是一个接口类型。那就是说 CreateStrategy 实现了 RESTCreateStrategy 相关方法。那么下面我们来看看 RESTCreateStrategy 这个接口有哪些方法。
 
 ```go
 // RESTCreateStrategy defines the minimum validation, accepted input, and
@@ -420,9 +420,9 @@ type RESTCreateStrategy interface {
 }
 ```
 
-大家回过头来，再来看看上面提到的deployment的[Strategy](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/strategy.go)是不是对这些方法的实现呢。
+大家回过头来，再来看看上面提到的 deployment 的 [Strategy](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/registry/apps/deployment/strategy.go) 是不是对这些方法的实现呢。
 
-好了分析完了BeforeCreate,然后就到了真正处理Create的操作了。上面代码可以看到，其实真正执行的还是DryRunnableStorage的相关方法。那么下面我们来看看[DryRunnableStorage](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/generic/registry/dryrun.go#L27)的实现。
+好了分析完了 BeforeCreate, 然后就到了真正处理 Create 的操作了。上面代码可以看到，其实真正执行的还是 DryRunnableStorage 的相关方法。那么下面我们来看看 [DryRunnableStorage](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/generic/registry/dryrun.go#L27) 的实现。
 
 ```go
 type DryRunnableStorage struct {
@@ -431,9 +431,9 @@ type DryRunnableStorage struct {
 }
 ```
 
-从DryRunnableStorage的定义来看，还真是对storage.Interface的一层封装，它包含了Codec的相关操作。
+从 DryRunnableStorage 的定义来看，还真是对 storage.Interface 的一层封装，它包含了 Codec 的相关操作。
 
-先来看看Codec的部分。从这个文件里面搜了下，只有下面这个函数里面用到了这个Codec去encode和decode。从代码中来看，就是把输入的runtime.Object通过Codec进去编码，然后在加个数据进行解码，然后返回解码后的runtime.Object.
+先来看看 Codec 的部分。从这个文件里面搜了下，只有下面这个函数里面用到了这个 Codec 去 encode 和 decode。从代码中来看，就是把输入的 runtime.Object 通过 Codec 进去编码，然后在加个数据进行解码，然后返回解码后的 runtime.Object.
 
 ```go
 func (s *DryRunnableStorage) copyInto(in, out runtime.Object) error {
@@ -452,7 +452,7 @@ func (s *DryRunnableStorage) copyInto(in, out runtime.Object) error {
 }
 ```
 
-这个Codec就先讲到这里，下面来看看它的Create的方法。
+这个 Codec 就先讲到这里，下面来看看它的 Create 的方法。
 
 ```go
 func (s *DryRunnableStorage) Create(ctx context.Context, key string, obj, out runtime.Object, ttl uint64, dryRun bool) error {
@@ -468,13 +468,13 @@ func (s *DryRunnableStorage) Create(ctx context.Context, key string, obj, out ru
 
 这里可以看到下面两种情况
 
-1. 如果是dryRun(预演)的情况下，就先去ETCD里get一把，看看数据库里面有没有，如果有了，就返回一个已经存在的错误。如果没有就调用copyInto的函数用Codec转换一下。然后返回转换后的结果，这里是没有对ETCD真的进行Create操作，所以也正对应了dryRun这个单词的意思了。
+1. 如果是 dryRun（预演）的情况下，就先去 ETCD 里 get 一把，看看数据库里面有没有，如果有了，就返回一个已经存在的错误。如果没有就调用 copyInto 的函数用 Codec 转换一下。然后返回转换后的结果，这里是没有对 ETCD 真的进行 Create 操作，所以也正对应了 dryRun 这个单词的意思了。
 
-2. 如果不是dryRun，是真的要创建资源的情况，那就调用了Storage的Create的方法去创建了。
+2. 如果不是 dryRun，是真的要创建资源的情况，那就调用了 Storage 的 Create 的方法去创建了。
 
-从这里也可以总结写这个DryRunnableStorage就是把真正的storage.Inferface封装了一层，就是如果是dryRun的情况下，只是预演一遍，如果不是dryRun的情况下，才去真正的操作ETCD.
+从这里也可以总结写这个 DryRunnableStorage 就是把真正的 storage.Inferface 封装了一层，就是如果是 dryRun 的情况下，只是预演一遍，如果不是 dryRun 的情况下，才去真正的操作 ETCD.
 
-好了，到这里，我们分析完了第二层，下面我们依次往下，看看[storage.Inferface](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/interfaces.go#L158)。
+好了，到这里，我们分析完了第二层，下面我们依次往下，看看 [storage.Inferface](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/interfaces.go#L158)。
 
 ### Storage.Interface 分析
 
@@ -542,11 +542,11 @@ type Interface interface {
 
 ```
 
-这个storage.Inferface提供了一系列通用存储接口给上层使用。而它的具体实现有两种，一种是CacherStorage即带缓存的资源存储对象,一种是UnderlyingStorage即不带缓存的底层存储对象. 而CacherStorage是在UnderlyingStorage上又封装了一层cache得来的。k8s默认使用的是CacherStorage.
+这个 storage.Inferface 提供了一系列通用存储接口给上层使用。而它的具体实现有两种，一种是 CacherStorage 即带缓存的资源存储对象，一种是 UnderlyingStorage 即不带缓存的底层存储对象。而 CacherStorage 是在 UnderlyingStorage 上又封装了一层 cache 得来的。k8s 默认使用的是 CacherStorage.
 
 ### UnderlyingStorage 分析
 
-我们先来看看简单点的UnderlyingStorage的实现，在源码中，它又叫[storagebackend](https://github.com/kubernetes/apiserver/tree/release-1.18/pkg/storage/storagebackend)。所以我们找到这个目录，进行阅读分析。我们可以看到这个[factory.go](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/storagebackend/factory/factory.go)这个文件里面，创建了ETCD3的对象。也就是这里的storagebackend对象。
+我们先来看看简单点的 UnderlyingStorage 的实现，在源码中，它又叫 [storagebackend](https://github.com/kubernetes/apiserver/tree/release-1.18/pkg/storage/storagebackend)。所以我们找到这个目录，进行阅读分析。我们可以看到这个 [factory.go](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/storagebackend/factory/factory.go) 这个文件里面，创建了 ETCD3 的对象。也就是这里的 storagebackend 对象。
 
 ```go
 // Create creates a storage backend based on given config.
@@ -563,7 +563,7 @@ func Create(c storagebackend.Config) (storage.Interface, DestroyFunc, error) {
 
 ```
 
-来看看[newETCD3Storage](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/storagebackend/factory/etcd3.go#L209)的实现。
+来看看 [newETCD3Storage](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/storagebackend/factory/etcd3.go#L209) 的实现。
 
 ```go
 func newETCD3Storage(c storagebackend.Config) (storage.Interface, DestroyFunc, error) {
@@ -597,7 +597,7 @@ func newETCD3Storage(c storagebackend.Config) (storage.Interface, DestroyFunc, e
 
 ```
 
-先来看看newETCD3Client这个函数，然后再来看看etcd3.New这个函数。
+先来看看 newETCD3Client 这个函数，然后再来看看 etcd3.New 这个函数。
 
 ```go
 func newETCD3Client(c storagebackend.TransportConfig) (*clientv3.Client, error) {
@@ -651,9 +651,9 @@ func newETCD3Client(c storagebackend.TransportConfig) (*clientv3.Client, error) 
 }
 ```
 
-这里就是调用ETCD的相关接口处创建ETCD的client。
+这里就是调用 ETCD 的相关接口处创建 ETCD 的 client。
 
-好了，通过这个函数创建了一个etcd的client，然后传入了etcd3.New中。我们再来看看[etcd3.New](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/etcd3/store.go#L87)这个函数。
+好了，通过这个函数创建了一个 etcd 的 client，然后传入了 etcd3.New 中。我们再来看看 [etcd3.New](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/etcd3/store.go#L87) 这个函数。
 
 ```go
 type store struct {
@@ -694,13 +694,13 @@ func newStore(c *clientv3.Client, pagingEnabled bool, codec runtime.Codec, prefi
 }
 ```
 
-这里就是创建了个store的结构，然后实现了storage.Interface的接口。可以从[store.go](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/etcd3/store.go)文件中看到。
+这里就是创建了个 store 的结构，然后实现了 storage.Interface 的接口。可以从 [store.go](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/etcd3/store.go) 文件中看到。
 
 ### CacherStorage 分析
 
-下面我们再来分析分析复杂的带cache的CacherStorage。
+下面我们再来分析分析复杂的带 cache 的 CacherStorage。
 
-首先通过[StorageWithCacher](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/generic/registry/storage_factory.go#L35)函数创建出CacherStorage
+首先通过 [StorageWithCacher](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/registry/generic/registry/storage_factory.go#L35) 函数创建出 CacherStorage
 
 ```go
 // Creates a cacher based given storageConfig.
@@ -715,7 +715,7 @@ func StorageWithCacher(capacity int) generic.StorageDecorator {
         triggerFuncs storage.IndexerFuncs,
         indexers *cache.Indexers) (storage.Interface, factory.DestroyFunc, error) {
 
-        //创建UnderlyingStorage
+        //创建 UnderlyingStorage
         s, d, err := generic.NewRawStorage(storageConfig)
         if err != nil {
             return s, d, err
@@ -728,7 +728,7 @@ func StorageWithCacher(capacity int) generic.StorageDecorator {
             klog.Infof("Storage caching is enabled for %T with capacity %v", newFunc(), capacity)
         }
 
-        //配置相关cacher的数据
+        //配置相关 cacher 的数据
         // TODO: we would change this later to make storage always have cacher and hide low level KV layer inside.
         // Currently it has two layers of same storage interface -- cacher and low level kv.
         cacherConfig := cacherstorage.Config{
@@ -744,7 +744,7 @@ func StorageWithCacher(capacity int) generic.StorageDecorator {
             Indexers:       indexers,
             Codec:          storageConfig.Codec,
         }
-        //创建cacherStorage
+        //创建 cacherStorage
         cacher, err := cacherstorage.NewCacherFromConfig(cacherConfig)
         if err != nil {
             return nil, func() {}, err
@@ -764,7 +764,7 @@ func StorageWithCacher(capacity int) generic.StorageDecorator {
 }
 ```
 
-这里返回的是个generic.StorageDecorator。从名字上看得出来，是个Decorator模式的使用。从它的定义来看，就是个函数类型，然后作用就是装饰一下输入得到一个输出。
+这里返回的是个 generic.StorageDecorator。从名字上看得出来，是个 Decorator 模式的使用。从它的定义来看，就是个函数类型，然后作用就是装饰一下输入得到一个输出。
 
 ```go
 // StorageDecorator is a function signature for producing a storage.Interface
@@ -780,7 +780,7 @@ type StorageDecorator func(
     indexers *cache.Indexers) (storage.Interface, factory.DestroyFunc, error)
 ```
 
-再来看看generic.NewRawStorage(storageConfig).这里就是调用了storagebackend的factory的Create函数，创建了一个UnderlyingStorage。
+再来看看 generic.NewRawStorage(storageConfig). 这里就是调用了 storagebackend 的 factory 的 Create 函数，创建了一个 UnderlyingStorage。
 
 ```go
 // NewRawStorage creates the low level kv storage. This is a work-around for current
@@ -791,7 +791,7 @@ func NewRawStorage(config *storagebackend.Config) (storage.Interface, factory.De
 }
 ```
 
-最后就是调用[cacherstorage.NewCacherFromConfig(cacherConfig)](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/cacher.go#L313)创建了cacherStorage.
+最后就是调用 [cacherstorage.NewCacherFromConfig(cacherConfig)](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/cacher.go#L313) 创建了 cacherStorage.
 
 ```go
 // NewCacherFromConfig creates a new Cacher responsible for servicing WATCH and LIST requests from
@@ -890,13 +890,13 @@ func NewCacherFromConfig(config Config) (*Cacher, error) {
 
 ```
 
-而CacherStorage通过3个部分实现了cache功能。分别是
+而 CacherStorage 通过 3 个部分实现了 cache 功能。分别是
 1. cacheWatcher. 观察者的管理。
-2. Cacher. 从watchCache中收到事件，然后将分发给每个cacheWatcher.
-3. watchCache. 通过Reflector框架于UnderlyingStorage进行交互，然后将UnderlyingStorage于ETCD交互的结果通过回调的方式eventHandler进行处理,并且分别储存到cache和Store中。
+2. Cacher. 从 watchCache 中收到事件，然后将分发给每个 cacheWatcher.
+3. watchCache. 通过 Reflector 框架于 UnderlyingStorage 进行交互，然后将 UnderlyingStorage 于 ETCD 交互的结果通过回调的方式 eventHandler 进行处理，并且分别储存到 cache 和 Store 中。
 
-下面我们先从[cacherWatcher](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/cacher.go#L1154)看起。
-这里cacherWatcher是通过两种不同的channel实现了event同步的功能。一个是从Cacher接收input的watchCacheEvent，然后将这种event转换成watch的event，最后发送出去。
+下面我们先从 [cacherWatcher](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/cacher.go#L1154) 看起。
+这里 cacherWatcher 是通过两种不同的 channel 实现了 event 同步的功能。一个是从 Cacher 接收 input 的 watchCacheEvent，然后将这种 event 转换成 watch 的 event，最后发送出去。
 
 下面来分析分析源码
 
@@ -921,7 +921,7 @@ type cacheWatcher struct {
 
 ```
 
-先来看看[process](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/cacher.go#L1333)函数
+先来看看 [process](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/cacher.go#L1333) 函数
 
 ```go
 func (c *cacheWatcher) process(ctx context.Context, initEvents []*watchCacheEvent, resourceVersion uint64) {
@@ -973,9 +973,9 @@ func (c *cacheWatcher) process(ctx context.Context, initEvents []*watchCacheEven
 }
 ```
 
-这个函数里面可以看到最后有个死循环接收input，然后调用sendWatchCacheEvent发送出去。**NOTE:这里从代码看发送事件的条件是资源版本必须要比之前的新才会发送**
+这个函数里面可以看到最后有个死循环接收 input，然后调用 sendWatchCacheEvent 发送出去。**NOTE: 这里从代码看发送事件的条件是资源版本必须要比之前的新才会发送**
 
-再来看看sendWatchCacheEvent这个函数。
+再来看看 sendWatchCacheEvent 这个函数。
 
 ```go
 // NOTE: sendWatchCacheEvent is assumed to not modify <event> !!!
@@ -1011,9 +1011,9 @@ func (c *cacheWatcher) sendWatchCacheEvent(event *watchCacheEvent) {
 }
 ```
 
-这个函数就是先把传入的watchCacheEvent事件转换为watch的事件格式，然后在发送给result channel。
+这个函数就是先把传入的 watchCacheEvent 事件转换为 watch 的事件格式，然后在发送给 result channel。
 
-讲完了cacheWatcher后，我们来看看[watchCache](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/watch_cache.go#L119).
+讲完了 cacheWatcher 后，我们来看看 [watchCache](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/watch_cache.go#L119).
 
 ```go
 // watchCache implements a Store interface.
@@ -1099,9 +1099,9 @@ func newWatchCache(
 
 ```
 
-这里有三个地方需要重点关注，一个就是cache，它是一个存储watchCacheEvent的循环buffer。一个是store，是一个cache.Indexer，这个我们看过client-go的同学们都知道了，是个支持index的cache。最后一个就是eventHandler，这个就是Add/Update/Delete 方法的回调。
+这里有三个地方需要重点关注，一个就是 cache，它是一个存储 watchCacheEvent 的循环 buffer。一个是 store，是一个 cache.Indexer，这个我们看过 client-go 的同学们都知道了，是个支持 index 的 cache。最后一个就是 eventHandler，这个就是 Add/Update/Delete 方法的回调。
 
-先来看看Add函数。
+先来看看 Add 函数。
 
 ```go
 // Add takes runtime.Object as an argument.
@@ -1116,9 +1116,9 @@ func (w *watchCache) Add(obj interface{}) error {
     return w.processEvent(event, resourceVersion, f)
 }
 ```
-可以看到是将object转换到runtime的object，然后再构造一个watch event，并存储到store中。最后调用processEvent对event进行进一步处理。
+可以看到是将 object 转换到 runtime 的 object，然后再构造一个 watch event，并存储到 store 中。最后调用 processEvent 对 event 进行进一步处理。
 
-下面再来看下[processEvent](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/watch_cache.go#L245)函数
+下面再来看下 [processEvent](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/watch_cache.go#L245) 函数
 
 ```go
 // processEvent is safe as long as there is at most one call to it in flight
@@ -1191,7 +1191,7 @@ func (w *watchCache) updateCache(event *watchCacheEvent) {
 }
 ```
 
-这里看到通过调用w.updateCache(wcEvent)函数，将这个event存储到了cache中。最后再做event相关的回调eventHandler处理。而这个eventHandler是通过newWatchCache函数参数出入。从上面的NewCacherFromConfig函数中，我们也可以看到，里面调用newWatchCache创建watchCache的时候，传入的是Cacher的processEvent。所以这里真正执行的是Cacher的processEvent。而这个函数就是将event传入到Cacher的incoming的channel中。具体的Cacher的实现，我们下面就会分析到。
+这里看到通过调用 w.updateCache(wcEvent) 函数，将这个 event 存储到了 cache 中。最后再做 event 相关的回调 eventHandler 处理。而这个 eventHandler 是通过 newWatchCache 函数参数出入。从上面的 NewCacherFromConfig 函数中，我们也可以看到，里面调用 newWatchCache 创建 watchCache 的时候，传入的是 Cacher 的 processEvent。所以这里真正执行的是 Cacher 的 processEvent。而这个函数就是将 event 传入到 Cacher 的 incoming 的 channel 中。具体的 Cacher 的实现，我们下面就会分析到。
 
 ```go
 func (c *Cacher) processEvent(event *watchCacheEvent) {
@@ -1203,7 +1203,7 @@ func (c *Cacher) processEvent(event *watchCacheEvent) {
 }
 ```
 
-最后再来分析一下Cacher的功能。从之前分析来看，我们知道这个Cacher其实是watchCache和cacheWatcher的纽带，它主要是从watchCache中获取事件，然后分发给所有的Watcher。
+最后再来分析一下 Cacher 的功能。从之前分析来看，我们知道这个 Cacher 其实是 watchCache 和 cacheWatcher 的纽带，它主要是从 watchCache 中获取事件，然后分发给所有的 Watcher。
 
 ```go
 // Cacher is responsible for serving WATCH and LIST requests for a given
@@ -1284,7 +1284,7 @@ type Cacher struct {
 }
 ```
 
-首先这个Cacher是实现了storage.Interface的所有方法的，是一个CacherStorage。上面我们有分析到它是怎么从watchCache中获取到event的，其实就是将processEvent这个回调传入watchCache中。下面来看看它是怎么分发event的。同样，在上面那个NewCacherFromConfig函数中，我们看到go cacher.dispatchEvents()。下面来看看这个函数。
+首先这个 Cacher 是实现了 storage.Interface 的所有方法的，是一个 CacherStorage。上面我们有分析到它是怎么从 watchCache 中获取到 event 的，其实就是将 processEvent 这个回调传入 watchCache 中。下面来看看它是怎么分发 event 的。同样，在上面那个 NewCacherFromConfig 函数中，我们看到 go cacher.dispatchEvents()。下面来看看这个函数。
 
 ```go
 func (c *Cacher) dispatchEvents() {
@@ -1327,7 +1327,7 @@ func (c *Cacher) dispatchEvents() {
 }
 ```
 
-显然，我们看到了从processEvent那里收到了event的incomingchannel，在这里被消费。然后调用dispatchEvent函数去分发了。再来看看dispatchEvent这个函数的内容。
+显然，我们看到了从 processEvent 那里收到了 event 的 incomingchannel，在这里被消费。然后调用 dispatchEvent 函数去分发了。再来看看 dispatchEvent 这个函数的内容。
 
 ```go
 func (c *Cacher) dispatchEvent(event *watchCacheEvent) {
@@ -1397,7 +1397,7 @@ func (c *Cacher) dispatchEvent(event *watchCacheEvent) {
 }
 ```
 
-然后调用这个startDispatching函数真正的进去分发操作
+然后调用这个 startDispatching 函数真正的进去分发操作
 
 ```go
 // startDispatching chooses watchers potentially interested in a given event
@@ -1453,8 +1453,7 @@ func (c *Cacher) startDispatching(event *watchCacheEvent) {
 }
 ```
 
-
-最后，我们来看看Cacher是如何和cacheWatcher关联上的。从代码上来看，只要是有人调用了Watch的方法或者WatchList方法(这个方法其实也是调用了Watch的方法)，就会创建一个cacheWatcher，然后存储到Cacher的watchers中。并且异步调用cacheWatcher的process方法去接收event。
+最后，我们来看看 Cacher 是如何和 cacheWatcher 关联上的。从代码上来看，只要是有人调用了 Watch 的方法或者 WatchList 方法（这个方法其实也是调用了 Watch 的方法），就会创建一个 cacheWatcher，然后存储到 Cacher 的 watchers 中。并且异步调用 cacheWatcher 的 process 方法去接收 event。
 
 ```go
 // Watch implements storage.Interface.
@@ -1542,8 +1541,8 @@ func (c *Cacher) Watch(ctx context.Context, key string, resourceVersion string, 
 }
 ```
 
-从上面代码中可以看到，在调用Watch的时候会根据当前调用这的资源版本去watchCache中获取下是否有没有消费的event，如果有，就会立马给watcher去消费了。
+从上面代码中可以看到，在调用 Watch 的时候会根据当前调用这的资源版本去 watchCache 中获取下是否有没有消费的 event，如果有，就会立马给 watcher 去消费了。
 
-到这里，基本从源码上讲完了CacherStorage的基本工作原理了。
+到这里，基本从源码上讲完了 CacherStorage 的基本工作原理了。
 
-好了，今天我们讲完了k8s对ETCD相关的代码了。下面我总结下，我对当前这部分架构的理解。首先有一个storage.Inferface对ETCD的通用存储访问接口，提供上层使用，这样可以隐藏底层实现对上层接口调用的影响。然后按照storage.Interface的接口进行对ETCD client的简单封装，就形成了UnderlyingStorage。然后又根据带有缓存功能，基于在封装好的UnderlyingStorage上实现了Cache的功能然后形成了CacherStorage。在storage.Interface上层是register.Store,它其实又在storage.Interface之上又封装了一层，带有策略的预处理和执行完之后的善后处理的功能。这样就可以提供不同资源有不同预处理和善后处理的需求、然后最上层就是各种不同资源的Restful的对外暴露的接口了。显然每种资源虽然可能有相同的ETCD的访问接口，但是都有可能会有不同的行为，所以register.Store层的封装就显得尤为重要了。
+好了，今天我们讲完了 k8s 对 ETCD 相关的代码了。下面我总结下，我对当前这部分架构的理解。首先有一个 storage.Inferface 对 ETCD 的通用存储访问接口，提供上层使用，这样可以隐藏底层实现对上层接口调用的影响。然后按照 storage.Interface 的接口进行对 ETCD client 的简单封装，就形成了 UnderlyingStorage。然后又根据带有缓存功能，基于在封装好的 UnderlyingStorage 上实现了 Cache 的功能然后形成了 CacherStorage。在 storage.Interface 上层是 register.Store, 它其实又在 storage.Interface 之上又封装了一层，带有策略的预处理和执行完之后的善后处理的功能。这样就可以提供不同资源有不同预处理和善后处理的需求、然后最上层就是各种不同资源的 Restful 的对外暴露的接口了。显然每种资源虽然可能有相同的 ETCD 的访问接口，但是都有可能会有不同的行为，所以 register.Store 层的封装就显得尤为重要了。
