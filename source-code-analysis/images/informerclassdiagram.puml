@@ -1,0 +1,314 @@
+@startuml clientgo
+package cache{
+  package shared_informer{
+    interface SharedInformer  {
+      + AddEventHandler(handler ResourceEventHandler)
+      + AddEventHandlerWithResyncPeriod(handler ResourceEventHandler, resyncPeriod time.Duration)
+      + GetStore() Store
+      + GetController() Controller
+      + Run(stopCh <-chan struct{})
+      + HasSynced() bool
+      + LastSyncResourceVersion() string
+      + SetWatchErrorHandler(handler WatchErrorHandler) error
+    }
+
+    interface SharedIndexInformer {
+      + SharedInformer
+      + AddIndexers(indexers Indexers) error
+      + GetIndexer() Indexer
+    }
+
+    SharedIndexInformer ..up|> SharedInformer
+
+    class sharedIndexInformer {
+      - indexer    Indexer
+      - controller Controller
+      - processor             *sharedProcessor
+      - cacheMutationDetector MutationDetector
+      - listerWatcher ListerWatcher
+      - objectType runtime.Object
+      - resyncCheckPeriod time.Duration
+      - defaultEventHandlerResyncPeriod time.Duration
+      - clock clock.Clock
+      - started, stopped bool
+      - startedLock      sync.Mutex
+      - blockDeltas sync.Mutex
+      - watchErrorHandler WatchErrorHandler
+    }
+
+    sharedIndexInformer ..up|> SharedIndexInformer
+
+    class sharedProcessor {
+      - listenersStarted bool
+      - listenersLock    sync.RWMutex
+      - listeners        []*processorListener
+      - syncingListeners []*processorListener
+      - clock            clock.Clock
+      - wg               wait.Group
+      - addListener(listener *processorListener)
+      - addListenerLocked(listener *processorListener)
+      - distribute(obj interface{}, sync bool)
+      - run(stopCh <-chan struct{})
+      - shouldResync() bool
+      - resyncCheckPeriodChanged(resyncCheckPeriod time.Duration)
+    }
+
+    sharedProcessor --> sharedIndexInformer
+
+    class processorListener {
+      - nextCh chan interface{}
+      - addCh  chan interface{}
+      - handler ResourceEventHandler
+      - pendingNotifications buffer.RingGrowing
+      - requestedResyncPeriod time.Duration
+      - resyncPeriod time.Duration
+      - nextResync time.Time
+      - resyncLock sync.Mutex
+      - add(notification interface{})
+      - pop()
+      - run() 
+      - shouldResync(now time.Time) bool
+      - determineNextResync(now time.Time)
+      - setResyncPeriod(resyncPeriod time.Duration)
+    }
+
+    processorListener "N" o-- "1" sharedProcessor
+  }
+
+  package controller{
+    class Config {
+      + Queue
+      + ListerWatcher
+      + Process ProcessFunc
+      + ObjectType runtime.Object
+      + FullResyncPeriod time.Duration
+      + ShouldResync ShouldResyncFunc
+      + RetryOnError bool
+      + WatchErrorHandler WatchErrorHandler
+    }
+
+    interface Controller  {
+      + Run(stopCh <-chan struct{})
+      + HasSynced() bool
+      + LastSyncResourceVersion() string
+    }
+
+    class controller {
+      - config         Config
+      - reflector      *Reflector
+      - reflectorMutex sync.RWMutex
+      - clock          clock.Clock
+      - processLoop()
+    }
+    
+    controller ..up|> Controller
+    Config ..up|> controller
+ 
+    interface ResourceEventHandler  {
+      + OnAdd(obj interface{})
+      + OnUpdate(oldObj, newObj interface{})
+      + OnDelete(obj interface{})
+    }
+ 
+    ResourceEventHandler ..up> Config
+
+    class ResourceEventHandlerFuncs {
+      + AddFunc    func(obj interface{})
+      + UpdateFunc func(oldObj, newObj interface{})
+      + DeleteFunc func(obj interface{})
+    }
+ 
+    ResourceEventHandlerFuncs ..up|> ResourceEventHandler
+ 
+    class FilteringResourceEventHandler{
+      + AddFunc    func(obj interface{})
+      + UpdateFunc func(oldObj, newObj interface{})
+      + DeleteFunc func(obj interface{})        
+    }
+ 
+    FilteringResourceEventHandler ..up|> ResourceEventHandler
+
+  }
+
+  package reflector{
+    class Reflector {
+      - name string
+      - expectedTypeName string
+      - expectedType reflect.Type
+      - expectedGVK *schema.GroupVersionKind
+      - store Store
+      - listerWatcher ListerWatcher
+      - backoffManager wait.BackoffManager
+      - resyncPeriod time.Duration
+      - ShouldResync func() bool
+      - clock clock.Clock
+      - paginatedResult bool
+      - lastSyncResourceVersion string
+      - isLastSyncResourceVersionGone bool
+      - lastSyncResourceVersionMutex sync.RWMutex
+      - WatchListPageSize int64
+      - watchErrorHandler WatchErrorHandler
+      + Run(stopCh <-chan struct{})
+      + LastSyncResourceVersion() string
+      + ListAndWatch(stopCh <-chan struct{}) error
+      - setExpectedType(expectedType interface{})
+      - resyncChan() (<-chan time.Time, func() bool)
+      - syncWith(items []runtime.Object, resourceVersion string) error
+      - watchHandler(start time.Time, w watch.Interface, resourceVersion *string, errc chan error, stopCh <-chan struct{}) error
+      - setLastSyncResourceVersion(v string)
+      - relistResourceVersion() string
+      - setIsLastSyncResourceVersionExpired(isExpired bool)        
+    }
+
+  }
+
+  package store{
+    interface Store {
+      + Add(obj interface{}) error
+      + Update(obj interface{}) error
+      + Delete(obj interface{}) error
+      + List() []interface{}
+      + ListKeys() []string
+      + Get(obj interface{}) (item interface{}, exists bool, err error)
+      + GetByKey(key string) (item interface{}, exists bool, err error)
+      + Replace([]interface{}, string) error
+      + Resync() error        
+    }
+
+    class cache  {
+      - cacheStorage ThreadSafeStore
+      - keyFunc KeyFunc
+      + Add(obj interface{}) error
+      + Update(obj interface{}) error
+      + Delete(obj interface{}) error
+      + List() []interface{}
+      + ListKeys() []string
+      + GetIndexers() Indexers
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + ListIndexFuncValues(indexName string) []string
+      + ByIndex(indexName, indexedValue string) ([]interface{}, error)
+      + AddIndexers(newIndexers Indexers) error
+      + Get(obj interface{}) (item interface{}, exists bool, err error)
+      + GetByKey(key string) (item interface{}, exists bool, err error)
+      + Replace([]interface{}, string) error
+      + Resync() error        
+    }
+
+    cache ..up|> Store
+  }
+
+  package index{
+    interface Indexer {
+      + Store
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + IndexKeys(indexName, indexedValue string) ([]string, error)
+      + ListIndexFuncValues(indexName string) []string
+      + ByIndex(indexName, indexedValue string) ([]interface{}, error)
+      + GetIndexers() Indexers
+      + AddIndexers(newIndexers Indexers) error        
+    }
+  }
+
+  package thread_safe_store{
+    interface ThreadSafeStore {
+      + Add(key string, obj interface{})
+      + Update(key string, obj interface{})
+      + Delete(key string)
+      + Get(key string) (item interface{}, exists bool)
+      + List() []interface{}
+      + ListKeys() []string
+      + Replace(map[string]interface{}, string)
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + IndexKeys(indexName, indexKey string) ([]string, error)
+      + ListIndexFuncValues(name string) []string
+      + ByIndex(indexName, indexKey string) ([]interface{}, error)
+      + GetIndexers() Indexers
+      + AddIndexers(newIndexers Indexers) error
+      + Resync() error        
+    }
+    
+    class threadSafeMap {
+      - lock  sync.RWMutex
+      - items map[string]interface{}
+      - indexers Indexers
+      - indices Indices
+      + Add(key string, obj interface{})
+      + Update(key string, obj interface{})
+      + Delete(key string)
+      + Get(key string) (item interface{}, exists bool)
+      + List() []interface{}
+      + ListKeys() []string
+      + Replace(map[string]interface{}, string)
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + IndexKeys(indexName, indexKey string) ([]string, error)
+      + ListIndexFuncValues(name string) []string
+      + ByIndex(indexName, indexKey string) ([]interface{}, error)
+      + GetIndexers() Indexers
+      + AddIndexers(newIndexers Indexers) error
+      + Resync() error
+      + updateIndices(oldObj interface{}, newObj interface{}, key string)
+      + deleteFromIndices(obj interface{}, key string)        
+    }
+
+    threadSafeMap ..up|> ThreadSafeStore
+  }
+
+  package fifo{
+    interface Queue {
+      + Store
+      + Pop(PopProcessFunc) (interface{}, error)
+      + AddIfNotPresent(interface{}) error
+      + HasSynced() bool
+      + Close()        
+    }
+    
+    class FIFO {
+      - lock sync.RWMutex
+      - cond sync.Cond
+      - items map[string]interface{}
+      - queue []string
+      - populated bool
+      - initialPopulationCount int
+      - keyFunc KeyFunc
+      - closed bool        
+    }
+
+    FIFO ..up|> Queue
+  }
+
+  package deltafifo{
+    class DeltaFIFO {
+      - lock sync.RWMutex
+      - cond sync.Cond
+      - items map[string]Deltas
+      - queue []string
+      - populated bool
+      - initialPopulationCount int
+      - keyFunc KeyFunc
+      - knownObjects KeyListerGetter
+      - closed bool
+      - emitDeltaTypeReplaced bool        
+    }
+
+    DeltaFIFO ..up|> Queue
+  }
+
+  Controller --up> sharedIndexInformer
+
+  Indexer --up> sharedIndexInformer
+
+  ResourceEventHandler --up> processorListener
+
+  Config --> Queue
+
+  Reflector --> controller
+
+  Store --> Reflector
+
+  ThreadSafeStore --up> cache
+
+  Indexer ..up|> Store
+
+  Queue ..up|> Store
+}
+@enduml
