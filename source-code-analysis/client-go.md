@@ -15,13 +15,10 @@
 
 图中各部分的详细说明，官方例子中的文档有详细说明，此处就不在赘述了！
 
-在开始代码之前，我把 client-go informer 的类图展示一下，方便下面代码理解更加方便。由于为了类图看起来简洁，我把 storage 的部分分离开了，所以看的时候，要结合下面两张图能够更好的理解。或者查看 [整个的类图](images/informerall.png).
+在开始代码之前，我把 client-go informer 的类图展示一下，方便下面代码理解更加方便。
 
 这个是整个 informer 的类图：
-![informerclassdiagram](images/informerclassdiagram.png)
-
-这个是 indexer 和 DeltaFIFO 的类图：
-![storageclassdiagram](images/storageclassdiagram.png)
+![informerclassdiagram](images/clientgoclassdiagram.svg)
 
 ## kube-controller-manager 回顾
 
