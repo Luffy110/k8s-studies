@@ -1,0 +1,149 @@
+@startuml workqueue
+package workqueue{
+    package queue.go{
+        interface Interface{
+          + Add(item interface{})
+          + Len() int
+          + Get() (item interface{}, shutdown bool)
+          + Done(item interface{})
+          + ShutDown()
+          + ShuttingDown() bool
+        }
+
+        class Type{
+          - queue []t
+          - dirty set
+          - processing set
+          - cond *sync.Cond
+          - shuttingDown bool
+          - metrics queueMetrics
+          - unfinishedWorkUpdatePeriod time.Duration
+          - clock                      clock.Clock
+          + Add(item interface{})
+          + Len() int
+          + Get() (item interface{}, shutdown bool)
+          + Done(item interface{})
+          + ShutDown()
+          + ShuttingDown() bool    
+          - updateUnfinishedWorkLoop()             
+        }
+
+        Type ..up|> Interface
+    }
+
+    package delaying_queue.go{
+        interface DelayingInterface{
+          + Interface
+          + AddAfter(item interface{}, duration time.Duration)
+        }
+
+        class delayingType{
+          + Interface
+          - clock clock.Clock
+          - stopCh chan struct{}
+          - stopOnce sync.Once
+          - heartbeat clock.Ticker
+          - waitingForAddCh chan *waitFor
+          - metrics retryMetrics
+          + ShutDown()
+          + AddAfter(item interface{}, duration time.Duration)
+          - waitingLoop()
+        }
+
+        delayingType ..up|> DelayingInterface
+
+        class waitFor{
+          - data    t
+          - readyAt time.Time
+          - index int
+        }
+
+        waitFor --up> delayingType
+    }
+
+    package default_rate_limiters.go{
+        interface RateLimiter{
+          + When(item interface{}) time.Duration
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+
+        class BucketRateLimiter{
+          - *rate.Limiter
+          + When(item interface{}) time.Duration
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+        BucketRateLimiter ..up|> RateLimiter
+
+        class ItemBucketRateLimiter{
+          - r     rate.Limit
+          - burst int
+          - limitersLock sync.Mutex
+          - limiters     map[interface{}]*rate.Limiter            
+          + When(item interface{}) time.Duration
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+        ItemBucketRateLimiter ..up|> RateLimiter
+
+        class ItemExponentialFailureRateLimiter{
+          - failuresLock sync.Mutex
+          - failures     map[interface{}]int
+          - baseDelay time.Duration
+          - maxDelay  time.Duration            
+          + When(item interface{}) time.Duration
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+        ItemExponentialFailureRateLimiter ..|> RateLimiter
+
+        class ItemFastSlowRateLimiter{
+          - failuresLock sync.Mutex
+          - failures     map[interface{}]int
+          - maxFastAttempts int
+          - fastDelay       time.Duration
+          - slowDelay       time.Duration            
+          + When(item interface{}) time.Duration
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+        ItemFastSlowRateLimiter ..|> RateLimiter
+
+        class MaxOfRateLimiter{
+          - limiters []RateLimiter
+          + When(item interface{}) time.Duration
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+        MaxOfRateLimiter ..|> RateLimiter
+    }
+
+    package rate_limiting_queue.go{
+        interface RateLimitingInterface{
+          + DelayingInterface
+          + AddRateLimited(item interface{})
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int
+        }
+
+        class rateLimitingType{
+          + DelayingInterface
+          - rateLimiter RateLimiter
+          + AddRateLimited(item interface{})
+          + Forget(item interface{})
+          + NumRequeues(item interface{}) int          
+        }
+
+        rateLimitingType ..up|> RateLimitingInterface
+    }
+
+    DelayingInterface --left> Interface
+    delayingType --up> Interface
+
+    RateLimitingInterface --left> DelayingInterface
+
+    rateLimitingType --down> DelayingInterface
+    rateLimitingType --down> RateLimiter
+}
+@enduml

@@ -1,0 +1,140 @@
+@startuml indexer
+package cache{
+  package store.go{
+    interface Store {
+      + Add(obj interface{}) error
+      + Update(obj interface{}) error
+      + Delete(obj interface{}) error
+      + List() []interface{}
+      + ListKeys() []string
+      + Get(obj interface{}) (item interface{}, exists bool, err error)
+      + GetByKey(key string) (item interface{}, exists bool, err error)
+      + Replace([]interface{}, string) error
+      + Resync() error        
+    }
+
+    class cache  {
+      - cacheStorage ThreadSafeStore
+      - keyFunc KeyFunc
+      + Add(obj interface{}) error
+      + Update(obj interface{}) error
+      + Delete(obj interface{}) error
+      + List() []interface{}
+      + ListKeys() []string
+      + GetIndexers() Indexers
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + ListIndexFuncValues(indexName string) []string
+      + ByIndex(indexName, indexedValue string) ([]interface{}, error)
+      + AddIndexers(newIndexers Indexers) error
+      + Get(obj interface{}) (item interface{}, exists bool, err error)
+      + GetByKey(key string) (item interface{}, exists bool, err error)
+      + Replace([]interface{}, string) error
+      + Resync() error        
+    }
+
+    cache ..up|> Store
+  }
+
+  package index.go{
+    interface Indexer {
+      + Store
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + IndexKeys(indexName, indexedValue string) ([]string, error)
+      + ListIndexFuncValues(indexName string) []string
+      + ByIndex(indexName, indexedValue string) ([]interface{}, error)
+      + GetIndexers() Indexers
+      + AddIndexers(newIndexers Indexers) error        
+    }
+  }
+
+  package thread_safe_store.go{
+    interface ThreadSafeStore {
+      + Add(key string, obj interface{})
+      + Update(key string, obj interface{})
+      + Delete(key string)
+      + Get(key string) (item interface{}, exists bool)
+      + List() []interface{}
+      + ListKeys() []string
+      + Replace(map[string]interface{}, string)
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + IndexKeys(indexName, indexKey string) ([]string, error)
+      + ListIndexFuncValues(name string) []string
+      + ByIndex(indexName, indexKey string) ([]interface{}, error)
+      + GetIndexers() Indexers
+      + AddIndexers(newIndexers Indexers) error
+      + Resync() error        
+    }
+    
+    class threadSafeMap {
+      - lock  sync.RWMutex
+      - items map[string]interface{}
+      - indexers Indexers
+      - indices Indices
+      + Add(key string, obj interface{})
+      + Update(key string, obj interface{})
+      + Delete(key string)
+      + Get(key string) (item interface{}, exists bool)
+      + List() []interface{}
+      + ListKeys() []string
+      + Replace(map[string]interface{}, string)
+      + Index(indexName string, obj interface{}) ([]interface{}, error)
+      + IndexKeys(indexName, indexKey string) ([]string, error)
+      + ListIndexFuncValues(name string) []string
+      + ByIndex(indexName, indexKey string) ([]interface{}, error)
+      + GetIndexers() Indexers
+      + AddIndexers(newIndexers Indexers) error
+      + Resync() error
+      + updateIndices(oldObj interface{}, newObj interface{}, key string)
+      + deleteFromIndices(obj interface{}, key string)        
+    }
+
+    threadSafeMap ..up|> ThreadSafeStore
+  }
+
+  package fifo.go{
+    interface Queue {
+      + Store
+      + Pop(PopProcessFunc) (interface{}, error)
+      + AddIfNotPresent(interface{}) error
+      + HasSynced() bool
+      + Close()        
+    }
+    
+    class FIFO {
+      - lock sync.RWMutex
+      - cond sync.Cond
+      - items map[string]interface{}
+      - queue []string
+      - populated bool
+      - initialPopulationCount int
+      - keyFunc KeyFunc
+      - closed bool        
+    }
+
+    FIFO ..up|> Queue
+  }
+
+  package deltafifo.go{
+    class DeltaFIFO {
+      - lock sync.RWMutex
+      - cond sync.Cond
+      - items map[string]Deltas
+      - queue []string
+      - populated bool
+      - initialPopulationCount int
+      - keyFunc KeyFunc
+      - knownObjects KeyListerGetter
+      - closed bool
+      - emitDeltaTypeReplaced bool        
+    }
+
+    DeltaFIFO ..up|> Queue
+  }
+
+  ThreadSafeStore --up> cache
+
+  Indexer ..up|> Store
+
+  Queue ..up|> Store
+}
+@enduml

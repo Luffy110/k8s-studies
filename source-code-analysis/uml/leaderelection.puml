@@ -1,0 +1,128 @@
+@startuml leaderelection
+package leaderelection{
+    package resourcelock{
+        package interface.go{
+            interface Interface{
+                + Get(ctx context.Context) (*LeaderElectionRecord, []byte, error)
+                + Create(ctx context.Context, ler LeaderElectionRecord) error
+                + Update(ctx context.Context, ler LeaderElectionRecord) error
+                + RecordEvent(string)
+                + Identity() string
+                + Describe() string
+            }
+            class LeaderElectionRecord{
+                + HolderIdentity       string      `json:"holderIdentity"`
+                + LeaseDurationSeconds int         `json:"leaseDurationSeconds"`
+                + AcquireTime          metav1.Time `json:"acquireTime"`
+                + RenewTime            metav1.Time `json:"renewTime"`
+                + LeaderTransitions    int         `json:"leaderTransitions"`
+            }
+        }
+        package endpointslock.go{
+            class EndpointsLock{
+                + EndpointsMeta metav1.ObjectMeta
+                + Client        corev1client.EndpointsGetter
+                + LockConfig    ResourceLockConfig
+                - e             *v1.Endpoints                
+                + Get(ctx context.Context) (*LeaderElectionRecord, []byte, error)
+                + Create(ctx context.Context, ler LeaderElectionRecord) error
+                + Update(ctx context.Context, ler LeaderElectionRecord) error
+                + RecordEvent(string)
+                + Identity() string
+                + Describe() string
+            }
+            EndpointsLock ..up|> Interface
+        }
+       
+        package configmaplock.go{
+            class ConfigMapLock{
+                + ConfigMapMeta metav1.ObjectMeta
+                + Client        corev1client.ConfigMapsGetter
+                + LockConfig    ResourceLockConfig
+                - cm            *v1.ConfigMap                
+                + Get(ctx context.Context) (*LeaderElectionRecord, []byte, error)
+                + Create(ctx context.Context, ler LeaderElectionRecord) error
+                + Update(ctx context.Context, ler LeaderElectionRecord) error
+                + RecordEvent(string)
+                + Identity() string
+                + Describe() string
+            }
+            ConfigMapLock ..up|> Interface
+        }
+
+        package leaselock.go{
+            class LeaseLock{
+                + LeaseMeta  metav1.ObjectMeta
+                + Client     coordinationv1client.LeasesGetter
+                + LockConfig ResourceLockConfig
+                - lease      *coordinationv1.Lease                
+                + Get(ctx context.Context) (*LeaderElectionRecord, []byte, error)
+                + Create(ctx context.Context, ler LeaderElectionRecord) error
+                + Update(ctx context.Context, ler LeaderElectionRecord) error
+                + RecordEvent(string)
+                + Identity() string
+                + Describe() string
+            }
+            LeaseLock ..|> Interface
+        }
+
+        package multilock.go{
+            class MultiLock{
+                + Primary   Interface
+                + Secondary Interface
+                + Get(ctx context.Context) (*LeaderElectionRecord, []byte, error)
+                + Create(ctx context.Context, ler LeaderElectionRecord) error
+                + Update(ctx context.Context, ler LeaderElectionRecord) error
+                + RecordEvent(string)
+                + Identity() string
+                + Describe() string
+            }
+            MultiLock ..|> Interface
+        }
+    }
+
+    package leaderelection.go{
+        class LeaderCallbacks{
+            + OnStartedLeading func(context.Context)
+            + OnStoppedLeading func()
+            + OnNewLeader func(identity string)
+        }
+        class LeaderElectionConfig{
+            + Lock rl.Interface
+            + LeaseDuration time.Duration
+            + RenewDeadline time.Duration
+            + RetryPeriod time.Duration
+            + Callbacks LeaderCallbacks
+            + WatchDog *HealthzAdaptor
+            + ReleaseOnCancel bool
+            + Name string
+        }
+        LeaderElectionConfig --up> LeaderCallbacks
+
+        class LeaderElector{
+            - config LeaderElectionConfig
+            - observedRecord    rl.LeaderElectionRecord
+            - observedRawRecord []byte
+            - observedTime      time.Time
+            - reportedLeader string
+            - clock clock.Clock
+            - metrics leaderMetricsAdapter
+            - name string
+            + Run(ctx context.Context)
+            + GetLeader() string
+            + IsLeader() bool
+            + Check(maxTolerableExpiredLease time.Duration) error
+            - acquire(ctx context.Context) bool
+            - renew(ctx context.Context)
+            - release() bool
+            - tryAcquireOrRenew(ctx context.Context) bool
+            - maybeReportTransition()
+        }
+        LeaderElector --up> LeaderElectionConfig
+    
+    }
+    LeaderElectionConfig --left> Interface
+
+    LeaderElector --up> LeaderElectionRecord
+}
+@enduml
