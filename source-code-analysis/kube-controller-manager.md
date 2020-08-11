@@ -2,7 +2,9 @@
 
 **NOTE: 由于代码篇幅太多，在分析的过程中会将不重要的部分删除，我将用//.................. 代替了。**
 
-## 函数入口在 [controller-manager.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/controller-manager.go)
+## 源码分析
+
+首先找到 kube-controller-manager 的函数入口：[controller-manager.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/controller-manager.go)。
 
 ``` golang
 func main() {
@@ -23,9 +25,9 @@ func main() {
 }
 ```
 
-## 进入 [NewControllerManagerCommand](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L92:6) 看下实现细节
+进入 [NewControllerManagerCommand](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L92:6) 看下实现细节。
 
-看到用的是 [cobra](https://github.com/spf13/cobra) 的库（一个非常牛的 CLI 的库，在很多项目中都有使用，这里不讲 cobra 具体怎么使用）。这里定义了一个函数赋值给了 cobra.Commnad 的 Run 成员函数接口，它将在 main 函数中调用 command.Execute() 后被执行。
+看到用的是 [cobra](https://github.com/spf13/cobra) 的库（一个非常牛的 CLI 的库，在很多项目中都有使用，这里不讲 cobra 具体怎么使用）。这里定义了一个函数赋值给了 cobra.Commnad 的 Run，它将在 main 函数中调用 command.Execute() 后被执行。
 
 ```go
 // NewControllerManagerCommand creates a *cobra.Command object with default parameters
@@ -66,6 +68,7 @@ controller, and serviceaccounts controller.`,
 ```
 
 然后这个函数中调到了真正的 Run 函数，这个函数里面才是进行真正的启动 kube-controller-manager 的逻辑处理。
+
 ```go
 // Run runs the KubeControllerManagerOptions.  This should never exit.
 func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
@@ -200,7 +203,9 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 }
 ```
 
-再看下 StartControllers 和 NewControllerInitializers 函数的具体实现，就能看出它是如何把每个 controller 都调用起来的。
+这里首先重点讲下这里的 leader 选举的机制。这部分是由 client-go 中的 leaderelection 包中实现的选举机制，主要目的是当有多个 kube-controller-manager 运行时，只会选择一个作为 leader，进行处理，其他的实例作为备份，当 leader 挂了或者其他错误，则会在备份的实例中重新选举一个作为 leader 进行处理。这样的实现机制提高了 kube-controller-manager 的高可用性。而这个机制也同样被使用在 kube-scheduler 中。具体的 leader 选举实现，可以参考我的 client-go(TODO: ADD leader election later)。
+
+然后我们再具体看下 StartControllers 和 NewControllerInitializers 函数的实现，就能看出它是如何把多个 controller 调用起来的。
 
 ```go
 func StartControllers(ctx ControllerContext, startSATokenController InitFunc, controllers map[string]InitFunc, unsecuredMux *mux.PathRecorderMux) error {
@@ -293,7 +298,9 @@ func NewControllerInitializers(loopMode ControllerLoopMode) map[string]InitFunc 
 }
 ```
 
-好了，下面在以 deployment 为例，进行深入分析。我们再进入 [startDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/apps.go#L82:6) 看下这里，到底做了什么。
+这里首先通过 NewControllerInitializers 函数将所有的 controller 加入到一个 map 中，然后在调用 StartControllers 函数时，一个一个进行启动，但是这里有一个 controller 需要特别的注意，它就是 SATokenController，这个是需要在其他的 controller 启动之前启动的。具体原因，看注释是说，其他的 controller 依赖这个 SATokenController 的结果。
+
+好了，下面再以 deployment 为例，进行深入分析，controller 是如何调用处理的。我们首先进入 [startDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/apps.go#L82:6) 看下这个函数具体实现。
 
 ```go
 func startDeploymentController(ctx ControllerContext) (http.Handler, bool, error) {
@@ -314,11 +321,14 @@ func startDeploymentController(ctx ControllerContext) (http.Handler, bool, error
 }
 ```
 
-大家肯定知道，现在创建一个 deployment, 它将会自己创建对应的 replicaset 和对应的 desired 个数的 pod。所以 deployment 的 controller 同时要实现 deployment，replicaset 和 pod 的 controller。从上面的 NewDeploymentController 函数中，也确实能看到这点。
+大家肯定知道，当我们手动创建一个 deployment 资源，它将会自己创建一个对应的 replicaset 和对应期待个数的 pod。所以 deployment 的 controller 同时要实现对 deployment，replicaset 和 pod 的资源的处理。从上面的 NewDeploymentController 函数中，也确实能看到这点。
 
-再进去 [NewDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L101:6)，看看它又是做了什么呢！
+具体的处理流程可以参考下图：
+![deploymentconfroller](images/deployment.png)
 
-其实到了这里，如果大家有研究过 k8s 提供的 client-go（大家可以参考这个官方例子 [workqueue](https://github.com/kubernetes/client-go/blob/master/examples/workqueue/main.go)) 的话，就很容易看懂每个具体的 controller 了，因为它们都是按照同样的框架写的。
+我们下面再来看看 [NewDeploymentController](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L101:6)，看看它的具体实现！
+
+其实到了这里，如果大家有研究过 k8s 提供的 client-go（大家可以参考这个官方例子 [workqueue](https://github.com/kubernetes/client-go/blob/master/examples/workqueue/main.go)) 的话，就很容易看懂每个具体的 controller 了，因为它们都是按照同样的框架写的。具体 client-go 的实现逻辑可以参考 [client-go](client-go.md)。
 
 ```go
 // NewDeploymentController creates a new DeploymentController.
@@ -359,18 +369,11 @@ func NewDeploymentController(dInformer appsinformers.DeploymentInformer, rsInfor
 
     dc.syncHandler = dc.syncDeployment
     dc.enqueueDeployment = dc.enqueue
-
-    dc.dLister = dInformer.Lister()
-    dc.rsLister = rsInformer.Lister()
-    dc.podLister = podInformer.Lister()
-    dc.dListerSynced = dInformer.Informer().HasSynced
-    dc.rsListerSynced = rsInformer.Informer().HasSynced
-    dc.podListerSynced = podInformer.Informer().HasSynced
     return dc, nil
 }
 ```
 
-这里就是通过重写资源的 Add,Update,Delete 的事件处理逻辑，就能实现当资源产生这些事件时，这些 handler 就会被执行。但是由于这里实现了 workqueue 的机制，你将会发现，这里的 handler 都是往一个 queue 里面装，然后真正从 queue 里面取事件，然后执行的是 syncHandler 这个函数接口，在上面函数里，可以看到，它其实指向了 dc.syncDeployment 这个函数，也就是说，最后真正执行逻辑处理的是这个函数。
+这里就是通过自定义资源的 Add,Update,Delete 的事件处理逻辑，就能实现当资源产生这些相应的事件时，相应的 handler 函数就会被执行。但是由于这里实现了 workqueue 的机制，你将会发现，这里的 handler 都是往一个 queue 里面装数据，然后真正从 queue 里面取出事件，并执行的是 syncHandler 这个接口，在上面函数里，可以看到，它其实指向了 dc.syncDeployment 这个函数，也就是说，最后真正执行逻辑处理的是这个函数。
 
 所以具体的处理逻辑在这个 [syncDeployment](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/deployment_controller.go#L563:33) 函数中。
 
@@ -421,6 +424,7 @@ func (dc *DeploymentController) syncDeployment(key string) error {
         return err
     }
 
+    // 如果是删除中，只是同步状态
     if d.DeletionTimestamp != nil {
         return dc.syncStatusOnly(d, rsList)
     }
@@ -432,6 +436,7 @@ func (dc *DeploymentController) syncDeployment(key string) error {
         return err
     }
 
+    //如果 deployment 是 Paused 状态，则调用 sync 同步
     if d.Spec.Paused {
         return dc.sync(d, rsList)
     }
@@ -463,58 +468,10 @@ func (dc *DeploymentController) syncDeployment(key string) error {
 }
 ```
 
-上面通过 [isScalingEvent](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L529:33) 判断是不是需要进行同步更新的操作，如果需要，则调用 [sync](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L49) 进行同步。
+上面这个函数中，实现了当发生 deployment controller 监听的事件时，进行相应的处理。这里有些由于个人并没有接触过，所有并不是很理解。但是大致的意思可以理解为，当 deployment 处于删除状态时，调用 syncStatusOnly 即可；当 d.Spec.Paused 为 true 的时候，调用
+dc.sync(d, rsList) 去更新相关资源；当 rollback 操作时，则调用 dc.rollback(d, rsList) 去处理；当时 scale 的时候，调用 dc.sync(d, rsList) 去处理；最后 判断 d.Spec.Strategy.Type 是什么类型，如果是 Recreate 时，则调用 dc.rolloutRecreate(d, rsList, podMap) 去处理，如果是 RollingUpdata 则调用 dc.rolloutRolling(d, rsList) 进行处理，如果两种都不是，则返回错误。
 
-```go
-// isScalingEvent checks whether the provided deployment has been updated with a scaling event
-// by looking at the desired-replicas annotation in the active replica sets of the deployment.
-//
-// rsList should come from getReplicaSetsForDeployment(d).
-// podMap should come from getPodMapForDeployment(d, rsList).
-func (dc *DeploymentController) isScalingEvent(d *apps.Deployment, rsList []*apps.ReplicaSet) (bool, error) {
-    newRS, oldRSs, err := dc.getAllReplicaSetsAndSyncRevision(d, rsList, false)
-    if err != nil {
-        return false, err
-    }
-    allRSs := append(oldRSs, newRS)
-    for _, rs := range controller.FilterActiveReplicaSets(allRSs) {
-        desired, ok := deploymentutil.GetDesiredReplicasAnnotation(rs)
-        if !ok {
-            continue
-        }
-        if desired != *(d.Spec.Replicas) {
-            return true, nil
-        }
-    }
-    return false, nil
-}
-
-// sync is responsible for reconciling deployments on scaling events or when they
-// are paused.
-func (dc *DeploymentController) sync(d *apps.Deployment, rsList []*apps.ReplicaSet) error {
-    newRS, oldRSs, err := dc.getAllReplicaSetsAndSyncRevision(d, rsList, false)
-    if err != nil {
-        return err
-    }
-    if err := dc.scale(d, newRS, oldRSs); err != nil {
-        // If we get an error while trying to scale, the deployment will be requeued
-        // so we can abort this resync
-        return err
-    }
-
-    // Clean up the deployment when it's paused and no rollback is in flight.
-    if d.Spec.Paused && getRollbackTo(d) == nil {
-        if err := dc.cleanupDeployment(oldRSs, d); err != nil {
-            return err
-        }
-    }
-
-    allRSs := append(oldRSs, newRS)
-    return dc.syncDeploymentStatus(allRSs, newRS, d)
-}
-```
-
-最后就是调用 [scale](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/deployment/sync.go#L298:33) 进行 scale up 或者 scale down.
+TODO: 添加各种处理分析。
 
 ## Reference
 
