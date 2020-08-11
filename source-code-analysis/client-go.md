@@ -6,25 +6,25 @@
 
 这篇将详细的讲解下这其中的机制。
 
-## informer 的实现机制
+## informer 实现机制概述
 
-阅读源码之前，一定要知道 informer 的实现机制，不然不太好理解。因为这里面还是挺复杂的。informer 主要是通过 list-watch 的的机制对 k8s 各种资源进行事件监听，然后实现快速的进行事件同步。下面我把 informer 的机制流图贴出来，以便后面分析代码的时候进行参照。
+阅读源码之前，一定要知道 informer 的实现机制，不然不太好理解。因为这里面还是挺复杂的。informer 主要是通过 list-watch 的的机制对 k8s 各种资源进行事件监听，然后实现快速的事件同步（这里的 watch 其实是基于 HTTP1.1 的 [分块传输编码](https://zh.wikipedia.org/wiki/%E5%88%86%E5%9D%97%E4%BC%A0%E8%BE%93%E7%BC%96%E7%A0%81) 实现的）。下面我把 informer 官方流图贴出来，以便后面分析代码的时候进行参照。
 下图来源 k8s 官方例子 sample-controller 的文档 [controller-client-go](https://github.com/kubernetes/sample-controller/blob/master/docs/controller-client-go.md).
 
 ![informer](images/informer.png)
 
 图中各部分的详细说明，官方例子中的文档有详细说明，此处就不在赘述了！
 
-在开始代码之前，我把 client-go informer 的类图展示一下，方便下面代码理解更加方便。
+在开始代码之前，我把我整理的 client-go informer 的类图展示一下，方便后面代码理解更加方便。
 
-这个是整个 informer 的类图：
-![informerclassdiagram](images/clientgoclassdiagram.svg)
+这个是整个 informer 相关类图：
+![informerclassdiagram](images/clientgo.png)
 
 ## kube-controller-manager 回顾
 
-上次在讲解 controller 的时候，我们直接跳过了这部分代码。今天我就补下这部分的内容，然后再慢慢的进入到 client-go 的源码中。不然以上来就分析，也不太好将 client-go 和 controller 关联起来。
+上次在分析 kube-controller-manager 的时候，我们直接跳过了这部分代码。今天我就补下这部分的内容，然后再慢慢的进入到 client-go 的源码中。不然也不太好将 client-go 和 kube-controller-manager 关联起来。
 
-上次我们看到过这部分的代码：
+上次 kube-controller-manager 的时候，我们看到过这部分的代码：
 
 ```go
 controllerContext, err := CreateControllerContext(c, rootClientBuilder, clientBuilder, ctx.Done)
@@ -41,12 +41,9 @@ controllerContext.ObjectOrMetadataInformerFactory.Start(controllerContext.Stop)
 close(controllerContext.InformersStarted)
 ```
 
-这里我们讲下 CreateControllerContext 函数具体做了些什么呢！
+这里我们讲下 CreateControllerContext 函数具体实现！
 
 ```go
-// CreateControllerContext creates a context struct containing references to resources needed by the
-// controllers such as the cloud provider and clientBuilder. rootClientBuilder is only used for
-// the shared-informers client and token controller.
 func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clientBuilder controller.ControllerClientBuilder, stop <-chan struct{}) (ControllerContext, error) {
     versionedClient := rootClientBuilder.ClientOrDie("shared-informers")
     // 这里用 NewSharedInformerFactory 接口创建了个 sharedInformers
@@ -61,9 +58,7 @@ func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clien
     if err := genericcontrollermanager.WaitForAPIServer(versionedClient, 10*time.Second); err != nil {
         return ControllerContext{}, fmt.Errorf("failed to wait for apiserver being healthy: %v", err)
     }
-
     //..................
-
     ctx := ControllerContext{
         ClientBuilder:                   clientBuilder,
         InformerFactory:                 sharedInformers,
@@ -83,7 +78,7 @@ func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clien
 
 从上面看来，CreateControllerContext 函数创建了 sharedInformers 和 metadataInformers 这两个 sharedInformer。
 
-有些同学就会问什么是 sharedInformer 呢？其实这里开始是没有 shared informer 的概念的。开始只有单个 object 的 informer，比如 pod informer，job informer 等。但是后来，有很多 object 其实有些依赖关系的，比如 deployment 就同时需要监听 replicaset 和 pod 的。按照之前的架构，那就会有很多这种相同的 object informer 在工作，之间相互独立，且浪费资源。后来为了避免这些问题，就有了 shared informer。顾名思义，就是很多个 object 可以共享一个 informer。比如 deployment 的 pod 的 informer 就和 replicaset 的 pod 的 informer 重用了。
+有些同学就会问什么是 sharedInformer 呢？其实这里开始是没有 shared informer 的概念的。据我所知，开始只有单个资源的 informer，比如 pod informer，job informer 等。但是后来，有很多资源被不同控制器中使用，比如 deployment 就同时需要监听 replicaset 和 pod 的事件，而 replicaset 也监听 replicaset 和 pod 的事件。按照之前的架构，那就会有很多这种相同的资源的 informer 在工作，之间相互独立，这样一来非常浪费资源，并且也使得 APIServer 监听了很多 listener。后来为了避免这些问题，就有了 shared informer。顾名思义，就是很多个控制器中对同一种资源的监听使用同一个 shared 的 informer，有这个 shared 的 informer 监听事件，并分发给不同的控制器。比如此时 deployment 的 pod 的 informer 就和 replicaset 的 pod 的 informer 重用了。
 
 好了，言归正传，下面从 [NewSharedInformerFactory](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/informers/factory.go) 这个函数入手，进行分析 client-go 的 informer 到底是怎么按照上面 flow 进行工作的！
 
@@ -197,9 +192,9 @@ func (f *sharedInformerFactory) Start(stopCh <-chan struct{}) {
 }
 ```
 
-然后看到 InformerFor 这个函数就是将具体的 informer 加到上面那个 map 中。然后通过 Start 函数将这些 informer 都异步调用起来。
+然后看到 InformerFor 这个函数就是将具体的 informer 加到上面那个 map 中。然后再通过 Start 函数将这些 informer 都异步调用起来。
 
-好了，再以 deployment 为例，在看看 startDeploymentController 和 NewDeploymentController 的时候干了什么。
+我们再以 deployment 为例，看看 startDeploymentController 和 NewDeploymentController 的具体实现。
 
 ```go
 func startDeploymentController(ctx ControllerContext) (http.Handler, bool, error) {
@@ -241,7 +236,9 @@ func NewDeploymentController(dInformer appsinformers.DeploymentInformer, rsInfor
 }
 ```
 
-DeploymentInformer 实现：
+这里可以看到在 NewDeploymentController 的时候，将不同的 ResourceEventHandlerFuncs 添加到不同的 informer 中。这里看到 deployment 控制器处理了 deployment informer 的 Add/Update/Delete,replicaset informer 的 Add/Update/Delete 和 podinformer 的 Delete 事件。
+
+下面我们来看看 DeploymentInformer 实现：
 
 ```go
 // DeploymentInformer provides access to a shared informer and lister for
@@ -297,7 +294,7 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 
 通过调用 ctx.InformerFactory.Apps().V1().Deployments() 将返回一个 [DeploymentInformer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/informers/apps/v1/deployment.go) 的 interface。然后在 NewDeploymentController 中通过 xxx.Informer() 函数将调用到上面说到的 InformerFor 函数，将这个 informer 添加到 shared informers 的 listeners 中去。
 
-可以看出在 NewDeploymentInformer 的时候调用了 NewFilteredDeploymentInformer，然后调用 client-go 里面的 cache.NewSharedIndexInformer 创建了个 SharedIndexInformer, 并传入了 listwatcher.
+可以看出在 NewDeploymentInformer 的时候调用了 NewFilteredDeploymentInformer，然后调用 client-go 里面的 cache.NewSharedIndexInformer 创建了个 SharedIndexInformer, 并传入了 listwatcher。
 
 ## SharedIndexInformer 分析
 
@@ -317,18 +314,6 @@ func NewSharedInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEv
     return NewSharedIndexInformer(lw, exampleObject, defaultEventHandlerResyncPeriod, Indexers{})
 }
 
-// NewSharedIndexInformer creates a new instance for the listwatcher.
-// The created informer will not do resyncs if the given
-// defaultEventHandlerResyncPeriod is zero.  Otherwise: for each
-// handler that with a non-zero requested resync period, whether added
-// before or after the informer starts, the nominal resync period is
-// the requested resync period rounded up to a multiple of the
-// informer's resync checking period.  Such an informer's resync
-// checking period is established when the informer starts running,
-// and is the maximum of (a) the minimum of the resync periods
-// requested before the informer starts and the
-// defaultEventHandlerResyncPeriod given here and (b) the constant
-// `minimumResyncPeriod` defined in this file.
 func NewSharedIndexInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration, indexers Indexers) SharedIndexInformer {
     realClock := &clock.RealClock{}
     sharedIndexInformer := &sharedIndexInformer{
@@ -344,50 +329,13 @@ func NewSharedIndexInformer(lw ListerWatcher, exampleObject runtime.Object, defa
     return sharedIndexInformer
 }
 
-// `*sharedIndexInformer` implements SharedIndexInformer and has three
-// main components.  One is an indexed local cache, `indexer Indexer`.
-// The second main component is a Controller that pulls
-// objects/notifications using the ListerWatcher and pushes them into
-// a DeltaFIFO --- whose knownObjects is the informer's local cache
-// --- while concurrently Popping Deltas values from that fifo and
-// processing them with `sharedIndexInformer::HandleDeltas`.  Each
-// invocation of HandleDeltas, which is done with the fifo's lock
-// held, processes each Delta in turn.  For each Delta this both
-// updates the local cache and stuffs the relevant notification into
-// the sharedProcessor.  The third main component is that
-// sharedProcessor, which is responsible for relaying those
-// notifications to each of the informer's clients.
 type sharedIndexInformer struct {
     indexer    Indexer
     controller Controller
 
     processor             *sharedProcessor
-    cacheMutationDetector MutationDetector
 
     listerWatcher ListerWatcher
-
-    // objectType is an example object of the type this informer is
-    // expected to handle.  Only the type needs to be right, except
-    // that when that is `unstructured.Unstructured` the object's
-    // `"apiVersion"` and `"kind"` must also be right.
-    objectType runtime.Object
-
-    // resyncCheckPeriod is how often we want the reflector's resync timer to fire so it can call
-    // shouldResync to check if any of our listeners need a resync.
-    resyncCheckPeriod time.Duration
-    // defaultEventHandlerResyncPeriod is the default resync period for any handlers added via
-    // AddEventHandler (i.e. they don't specify one and just want to use the shared informer's default
-    // value).
-    defaultEventHandlerResyncPeriod time.Duration
-    // clock allows for testability
-    clock clock.Clock
-
-    started, stopped bool
-    startedLock      sync.Mutex
-
-    // blockDeltas gives a way to stop all event distribution so that a late event handler
-    // can safely join the shared informer.
-    blockDeltas sync.Mutex
 }
 
 func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
@@ -436,49 +384,15 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 
 ```
 
+这里可以看到 sharedIndexInformer 中主要包含了 Indexer，Controller，sharedProcessor 和 ListerWatcher。这里可以看到之前的类图中相互的关系加以理解。
+
 ## Controller 分析
 
-从 sharedIndexInformer 的 Run 函数中，我们可以看到，它创建了个 DeltaFiFOQueue 赋值给了 Config 结构，然后在创建 Controller 的时候传了进去。然后开了两个线程分别做 s.cacheMutationDetector.Run 和 s.processor.run， 然后再调用了 s.controller.Run，
+从 sharedIndexInformer 的 Run 函数中，我们可以看到，它创建了个 DeltaFIFO  赋值给了 Config 结构中的 Queue，然后在创建 Controller 的时候传了进去。然后开了两个 goroutine 分别运行 s.cacheMutationDetector.Run 和 s.processor.run， 最后再调用了 s.controller.Run。
 
 我们再进入 [controller.go](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/controller.go) 看看 controller 的 Run。
 
 ```go
-// Config contains all the settings for one of these low-level controllers.
-type Config struct {
-    // The queue for your objects - has to be a DeltaFIFO due to
-    // assumptions in the implementation. Your Process() function
-    // should accept the output of this Queue's Pop() method.
-    Queue
-
-    // Something that can list and watch your objects.
-    ListerWatcher
-
-    // Something that can process a popped Deltas.
-    Process ProcessFunc
-
-    // ObjectType is an example object of the type this controller is
-    // expected to handle.  Only the type needs to be right, except
-    // that when that is `unstructured.Unstructured` the object's
-    // `"apiVersion"` and `"kind"` must also be right.
-    ObjectType runtime.Object
-
-    // FullResyncPeriod is the period at which ShouldResync is considered.
-    FullResyncPeriod time.Duration
-
-    // ShouldResync is periodically used by the reflector to determine
-    // whether to Resync the Queue. If ShouldResync is `nil` or
-    // returns true, it means the reflector should proceed with the
-    // resync.
-    ShouldResync ShouldResyncFunc
-
-    // If true, when Process() returns an error, re-enqueue the object.
-    // TODO: add interface to let you inject a delay/backoff or drop
-    //       the object completely if desired. Pass the object in
-    //       question to this interface as a parameter.  This is probably moot
-    //       now that this functionality appears at a higher level.
-    RetryOnError bool
-}
-
 // `*controller` implements Controller
 type controller struct {
     config         Config
@@ -538,23 +452,13 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 
 ```
 
-从上面的 controller 的这个结构体的 Run 可以看到，它干了两件是，一个是创建了个 Reflector，可以看到传入了一个 ListerWatcher 的实例和一个 Queue, 然后调用 r.Run 将其调用起来，另一个就是调用 c.processLoop.
+从上面的 Run 可以看到，它主要干了两件事，一个是创建了个 Reflector，并且可以看到传入了一个 ListerWatcher 的实例和一个 Queue, 然后调用 r.Run 将其调用起来，另一个就是调用 c.processLoop。这里的 r.Run 就是接收 watch 的事件，将数据放入 DeltaFIFO 中，然后 c.processLoop 从 DeltaFIFO 中取数据进行处理。下面将详细分析这部分处理。
 
 ## Reflector 分析
 
-从上面的 flow 我们可以知道 [Reflector](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/reflector.go) 的工作就是从 list-watch api server 的各种 object，然后将各种事件添加到 DeltaFIFOQueue 中让 informer 去消费。那我们现在看看 Reflector 的实现：
+从上面的 flow 我们可以知道 [Reflector](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/reflector.go) 的工作就是使用 list-watch 机制监听 APIServer 的各种资源事件，然后将收到的事件添加到 DeltaFIFOQueue 中让 controller 去消费。那我们现在看看 Reflector 的具体实现：
 
 ```go
-// NewReflector creates a new Reflector object which will keep the
-// given store up to date with the server's contents for the given
-// resource. Reflector promises to only put things in the store that
-// have the type of expectedType, unless expectedType is nil. If
-// resyncPeriod is non-zero, then the reflector will periodically
-// consult its ShouldResync function to determine whether to invoke
-// the Store's Resync operation; `ShouldResync==nil` means always
-// "yes".  This enables you to use reflectors to periodically process
-// everything as well as incrementally processing the things that
-// change.
 func NewReflector(lw ListerWatcher, expectedType interface{}, store Store, resyncPeriod time.Duration) *Reflector {
     return NewNamedReflector(naming.GetNameFromCallsite(internalPackages...), lw, expectedType, store, resyncPeriod)
 }
@@ -591,7 +495,7 @@ func (r *Reflector) Run(stopCh <-chan struct{}) {
 }
 ```
 
-上面可以看到在 NewReflector 的时候将 ListerWatcher 和 queue 传了过来，分别赋值给了 listerWatcher 和 store. 然后在调用 Run 的时候，就调用了 ListAndWatch 进行核心操作。
+上面可以看到在 NewReflector 的时候将 ListerWatcher 和 queue 传了过来，分别赋值给了 listerWatcher 和 store. 然后再调用 Run 的时候，就调用了 ListAndWatch 进行核心操作。下面来看看 ListAndWatch 的具体实现逻辑：
 
 ```go
 // ListAndWatch first lists all items and get the resource version at the moment of call,
@@ -846,23 +750,14 @@ loop:
 }
 ```
 
-上面就是 Reflector 的灵魂俩函数了。对于 ListAndWatch，虽然代码很多，但是从注释上来看，也就是先 list 出所有 object item, 然后获取正在使用的版本，再去 watch 使用的版本 object 的变化事件。然后调用 watchHandler 进行无线循环的接收变化事件，并将各种接收到的事件放入到 Store（也就是那个 DeltaFIFOQueue) 中。
+上面就是 Reflector 的灵魂函数了。对于 ListAndWatch，虽然代码很多，但是从注释上来看，也就是先 list 出所有资源，然后获取正在使用的版本，再去 watch 使用的版本资源变化事件。然后调用 watchHandler 进行无线循环的接收变化事件，并将各种接收到的事件放入到 Store（也就是 DeltaFIFOQueue) 中。
 到这里我们知道了 Reflector 的工作方式了，那么它将事件放到 Queue 中，什么时候去处理呢？谁去处理呢？
 
-## Informer 分析
+## sharedProcessor 分析
 
-下面就回到 controller 分析小节中，从上面我们知道一个线程就是无限的往 Queue 中加数据，另一个 s.controller.Run 是干什么的？ 我想大家应该想到了。是的，它就是无限的循环在 queue 中取数据进行处理。下面我们就从 [processLoop](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/controller.go#L171:22) 开始分析！
+下面就回到 controller 分析小节中，从上面我们知道一个线程就是一直往 Queue 中加数据，另一个 s.controller.Run 是干什么的？ 我想大家应该想到了。是的，它就是一直在 queue 中取数据进行处理。下面我们就从 [processLoop](https://github.com/kubernetes/kubernetes/blob/e1e78ec6b0a2d6050b6076ebe6e34288a6df337e/staging/src/k8s.io/client-go/tools/cache/controller.go#L171:22) 开始分析！
 
 ```go
-// processLoop drains the work queue.
-// TODO: Consider doing the processing in parallel. This will require a little thought
-// to make sure that we don't end up processing the same object multiple times
-// concurrently.
-//
-// TODO: Plumb through the stopCh here (and down to the queue) so that this can
-// actually exit when the controller is stopped. Or just give up on this stuff
-// ever being stoppable. Converting this whole package to use Context would
-// also be helpful.
 func (c *controller) processLoop() {
     for {
         obj, err := c.config.Queue.Pop(PopProcessFunc(c.config.Process))
@@ -930,18 +825,12 @@ func (s *sharedIndexInformer) HandleDeltas(obj interface{}) error {
 }
 ```
 
-可以看到这个函数真是符合 flow 中的 informer 干的事，将从 DeltaFIFOQueue 中读到的各种事件，进行分发给 custome controller 和将变化的数据更新到 indexer.
+可以看到这个函数真是符合 flow 中的 informer 干的事，将从 DeltaFIFOQueue 中取出的事件，通过 processor 将数据分发给不同的 listener 并将变化的数据更新到 indexer。
 
-下面看看它是怎么将事件分发给各种 controller 的。
-从上面 sharedInformer 我们可看到在创建 sharedIndexInformer 的时候，我们创建了个 sharedProcessor 给了 sharedIndexInformer 的 processor，
+下面看看它是怎么将事件分发给各种 listener 的。
+从上面 sharedInformer， 我们可看到在创建 sharedIndexInformer 的时候，我们创建了个 sharedProcessor 给了 sharedIndexInformer 的 processor，因此我们要来看看 sharedProcessor 的具体实现。
 
 ```go
-// sharedProcessor has a collection of processorListener and can
-// distribute a notification object to its listeners.  There are two
-// kinds of distribute operations.  The sync distributions go to a
-// subset of the listeners that (a) is recomputed in the occasional
-// calls to shouldResync and (b) every listener is initially put in.
-// The non-sync distributions go to every listener.
 type sharedProcessor struct {
     listenersStarted bool
     listenersLock    sync.RWMutex
@@ -1003,22 +892,11 @@ func (p *sharedProcessor) run(stopCh <-chan struct{}) {
 
 ```
 
-可以看出来，sharedProcessor 维护了两个 processorListener slice, 一个 listeners 和一个 syncingListeners。顾名思义，这两个区别就是一个是全集，一个是正在 syncing 的 listeners。sharedProcessor 提供了 addListener 向两个 slice 中添加 listener，然后调用 processorListene 的 run 和 pop 方法。提供了 distribute 将数据添加到各种添加过的 listeners。
+可以看出来，sharedProcessor 维护了两个 processorListener 列表，一个是 listeners 另一个是 syncingListeners。这里的 listeners 是一个全集，所有的调用 watch 的 client 都会被加入这个列表中，而 syncingListeners 这个是如果你在 watch 的时候，指定了需要 resync，则将同时被加到这个列表中。sharedProcessor 提供了 addListener 向两个列表中添加 listener，然后调用 processorListene 的 run 和 pop 方法。通过 distribute 方法将数据分发给列表中的 listeners。
 
 再看看 processorListener 做了什么？
 
 ```go
-// processorListener relays notifications from a sharedProcessor to
-// one ResourceEventHandler --- using two goroutines, two unbuffered
-// channels, and an unbounded ring buffer.  The `add(notification)`
-// function sends the given notification to `addCh`.  One goroutine
-// runs `pop()`, which pumps notifications from `addCh` to `nextCh`
-// using storage in the ring buffer while `nextCh` is not keeping up.
-// Another goroutine runs `run()`, which receives notifications from
-// `nextCh` and synchronously invokes the appropriate handler method.
-//
-// processorListener also keeps track of the adjusted requested resync
-// period of the listener.
 type processorListener struct {
     nextCh chan interface{}
     addCh  chan interface{}
@@ -1031,28 +909,6 @@ type processorListener struct {
     // TODO: This is no worse than before, since reflectors were backed by unbounded DeltaFIFOs, but
     // we should try to do something better.
     pendingNotifications buffer.RingGrowing
-
-    // requestedResyncPeriod is how frequently the listener wants a
-    // full resync from the shared informer, but modified by two
-    // adjustments.  One is imposing a lower bound,
-    // `minimumResyncPeriod`.  The other is another lower bound, the
-    // sharedProcessor's `resyncCheckPeriod`, that is imposed (a) only
-    // in AddEventHandlerWithResyncPeriod invocations made after the
-    // sharedProcessor starts and (b) only if the informer does
-    // resyncs at all.
-    requestedResyncPeriod time.Duration
-    // resyncPeriod is the threshold that will be used in the logic
-    // for this listener.  This value differs from
-    // requestedResyncPeriod only when the sharedIndexInformer does
-    // not do resyncs, in which case the value here is zero.  The
-    // actual time between resyncs depends on when the
-    // sharedProcessor's `shouldResync` function is invoked and when
-    // the sharedIndexInformer processes `Sync` type Delta objects.
-    resyncPeriod time.Duration
-    // nextResync is the earliest time the listener should get a full resync
-    nextResync time.Time
-    // resyncLock guards access to resyncPeriod and nextResync
-    resyncLock sync.Mutex
 }
 
 func (p *processorListener) add(notification interface{}) {
@@ -1114,15 +970,15 @@ func (p *processorListener) run() {
 }
 ```
 
-看到这里，如果写过自己的 controller 的同学们是不是瞬间懂了。原来就是它提供了一个 ResourceEventHandler 给我们自己实现的啊！对，没错，就是这里，它提供了 ResourceEventHandler 这个 interface 给用户，并提供了三个函数 OnAdd，OnUpdate，OnDelete 接口。好了，从代码可以看出，它通过两个 channel addCh，nextCh 实现了两个 go runtine 进行通信。add 方法向 addCh 放数据，pop 方法从 addCh 里面取数据放到 nextCh，然后 run 从 nextCh 里面取数据，给自定义的 OnXXX 函数进行处理。
+看到这里，如果写过 controller 的同学们是不是瞬间懂了。原来我们添加的 ResourceEventHandler 在这里被调用了啊！对，没错，就是这里，它提供了 ResourceEventHandler 这个 interface 给用户，并提供了三个函数 OnAdd，OnUpdate，OnDelete 接口。好了，从代码可以看出，它通过两个 channel addCh 和 nextCh 实现了两个 go runtine 进行通信。add 方法向 addCh 添加数据，pop 方法从 addCh 里面取出数据放到 nextCh，然后 run 从 nextCh 里面取数据，给自定义的 OnXXX 函数进行处理。
 
-**NOTE**: 这里 pop 里面的实现逻辑有点不太好懂。我在这里详细的将一下。它定义了一个 nextCh 只写 channel，然后无限循环的从 addCh 里面读，当 addCh 里面放入了数据，这边 pop 就收到了数据，进入了第二个 select case 条件，此时 notification 肯定是个 nil, 然后就把收到的数据放到 notification，然后把定义的局部的 channel nextCh 指向 p.nextCh, 也就是说写入这个只写的 channel 就写入了 p.nextCh 里面了，让 run 去处理。好了，当放到 addCh 里面的速度大于处理的速度，它就放到一个 pendingNotifications （一个无限循 buffer)。当所有事件处理完成，就又把 nextCh channel 设置成了 nil, 也就是 disabled 掉了这个 select case 了，然后当有数据了，就又开始这个逻辑循环。
+**NOTE**: 这里 pop 里面的实现逻辑有点不太好懂。我在这里详细的描述一下：它定义了一个 nextCh 是一个只写 channel，然后无限循环的从 addCh 里面读数据，当 addCh 里面放入了数据，这边 pop 就收到了数据，进入了第二个 select case 条件，此时 notification 肯定是个 nil, 然后就把收到的数据放到 notification，然后把定义的局部的 channel nextCh 指向 p.nextCh, 也就是说写入这个只写的 channel 就写入了 p.nextCh 里面了，让 run 去处理。好了，当放到 addCh 里面的速度大于处理的速度，它就放到一个 pendingNotifications （一个无限循 buffer)。当所有事件处理完成，就又把 nextCh channel 设置成了 nil, 也就是 disabled 掉了这个 select case 了，然后当有数据了，就又开始这个逻辑循环。
 
 ## Indexer 分析
 
-上面从 Informer 分析部分，可以看到在 HandleDeltas 的时候，也就数据更新到了 indexer 中了。下面就来分析下 Indexer 的代码。同理在创建 SharedIndexInformer 的时候将赋值这个 indexer，但是 sharedinformer 提供了两种接口，NewSharedInformer 和 NewSharedIndexInformer，这两个前者是使用了一个默认的 indexer，后者是使用了传入的 indexer。
+从上面的分析中，有提到在 HandleDeltas 的时候，将数据更新到了 indexer 中。下面就来分析下 Indexer 的代码。
 
-在 NewSharedIndexInformer 中将调用 [NewIndexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/store.go#L261:6) 的函数，创建一个 indexer。从下面 NewIndexer 函数中可以看到，它其实是创建了个用线程安全的 store 实现的 [Indexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/index.go)。
+在 NewSharedIndexInformer 中调用 [NewIndexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/store.go#L261:6) 的函数，创建一个 indexer。从下面 NewIndexer 函数中可以看到，它其实是创建了个线程安全的 store 实现的 [Indexer](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/client-go/tools/cache/index.go)。
 
 ```go
 // NewIndexer returns an Indexer implemented simply with a map and a lock.
@@ -1265,7 +1121,7 @@ type ThreadSafeStore interface {
 }
 ```
 
-好了，由于 client-go 里面的代码讲起来实在太多了。由于篇幅原因。对于这部分后面可以再带大家一起分析下这部分的实现。
+好了，到此 sharedinformer 的机制基本分析完了，至于 indexer 的具体实现，由于篇幅问题，不在这里分析了，如有兴趣，可以参考我这篇文章 [client-go 学习总结](https://luffyao.com/2020/08/clientgo/)。
 
 ## References
 

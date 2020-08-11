@@ -316,7 +316,7 @@ func (e *Store) Create(ctx context.Context, obj runtime.Object, createValidation
             return nil, err
         }
     }
-    
+
     //如果需要装饰下结果，就装饰一下，再返回
     if e.Decorator != nil {
         if err := e.Decorator(out); err != nil {
@@ -531,7 +531,7 @@ type Interface interface {
     // be have at least 'resourceVersion'.
     List(ctx context.Context, key string, resourceVersion string, p SelectionPredicate, listObj runtime.Object) error
 
-    // GuaranteedUpdate 
+    // GuaranteedUpdate
     GuaranteedUpdate(
         ctx context.Context, key string, ptrToType runtime.Object, ignoreNotFound bool,
         precondtions *Preconditions, tryUpdate UpdateFunc, suggestion ...runtime.Object) error
@@ -891,6 +891,7 @@ func NewCacherFromConfig(config Config) (*Cacher, error) {
 ```
 
 而 CacherStorage 通过 3 个部分实现了 cache 功能。分别是
+
 1. cacheWatcher. 观察者的管理。
 2. Cacher. 从 watchCache 中收到事件，然后将分发给每个 cacheWatcher.
 3. watchCache. 通过 Reflector 框架于 UnderlyingStorage 进行交互，然后将 UnderlyingStorage 于 ETCD 交互的结果通过回调的方式 eventHandler 进行处理，并且分别储存到 cache 和 Store 中。
@@ -1116,6 +1117,7 @@ func (w *watchCache) Add(obj interface{}) error {
     return w.processEvent(event, resourceVersion, f)
 }
 ```
+
 可以看到是将 object 转换到 runtime 的 object，然后再构造一个 watch event，并存储到 store 中。最后调用 processEvent 对 event 进行进一步处理。
 
 下面再来看下 [processEvent](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/cacher/watch_cache.go#L245) 函数
