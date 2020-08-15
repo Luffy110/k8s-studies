@@ -538,6 +538,7 @@ func installAPI(s *GenericAPIServer, c *Config) {
     }
 }
 ```
+
 这个函数就是将对应的 APIHandler 添加到 route 中。
 
 下面在聊聊 [s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo)](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/apiserver/pkg/server/genericapiserver.go#L503) 这个函数。它主要是安装相应的 apiGroupInfo 到上面 GenericAPIServer 的 APIServerHandler 中去。基本和 installAPI 功能类似。
@@ -801,6 +802,7 @@ func (c completedConfig) NewWithDelegate(delegationTarget genericapiserver.Deleg
     return s, nil
 }
 ```
+
 这个函数里面的大致流程大家已经熟悉了。是的和另外两个类似，先通过调用 c.GenericConfig.New("kube-aggregator", delegationTarget) 去创建 kube-aggregator 的 generic server。然后通过调用 generic 的 InstallAPIGroup 方法将相应的 Rest 添加到 Handler 中。同样这里的重点是 delegateAPIServer，这里是将 APIServer 的 generic service 传入。然后将它的 APIServerHandler 中的 Director 添加到了 APIAggregator 中 APIServerHandler 中的 NonGoRestfulMux。
 
 #### 小结

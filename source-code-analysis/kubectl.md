@@ -66,7 +66,7 @@ func NewKubectlCommand(in io.Reader, out, err io.Writer) *cobra.Command {
         },
         BashCompletionFunction: bashCompletionFunc,
     }
-    
+
     //...............................
 
     // 2. 创建了个 Factory.
@@ -239,6 +239,7 @@ func NewFactory(clientGetter genericclioptions.RESTClientGetter) Factory {
 ```
 
 上面那个 NewFactory 函数 创建了个 factoryImpl 实例，但是返回的是个 Factory inferface。 其实在这里它是实现了个简单工厂模式将具体的实现隐藏了起来。好了，那么我们就来看看这个 Factory Interface 有哪些接口。
+
 ```go
 type Factory interface {
     genericclioptions.RESTClientGetter
@@ -438,7 +439,7 @@ func (o *CreateOptions) RunCreate(f cmdutil.Factory, cmd *cobra.Command) error {
         LabelSelectorParam(o.Selector).
         Flatten().
         Do()
- 
+
 ```
 
 这里我们想同学们都还记得这个 f 的实例是谁吧。没错，是 factoryImpl。就是上面提到的用简单工厂模式生产出来的。既然我们知道了 f 是谁了。那我们就来看看 [factoryImpl.NewBuilder()](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/kubectl/pkg/cmd/util/factory_client_access.go#L95) 函数

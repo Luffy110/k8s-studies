@@ -25,6 +25,7 @@ func main() {
 ```
 
 可以看到 scheduler 和 controller 基本都是一样的，都是使用了 cobra CLI 第三方库。所以下面就直接去看看 scheduler 真正运行的函数吧。
+
 ```go
 // Run executes the scheduler based on the given configuration. It only returns on error or when context is done.
 func Run(ctx context.Context, cc schedulerserverconfig.CompletedConfig, outOfTreeRegistryOptions ...Option) error {
@@ -216,6 +217,7 @@ func New(client clientset.Interface,
 ```
 
 从代码里可以看到，其主要做了：
+
 1. 将传入的 ComponentConfig 中的各种配置的参数赋值给 schedulerOptions。
 
 2. 创建一个 volume binder。
@@ -824,7 +826,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
             sched.recordSchedulingFailure(prof, assumedPodInfo, preBindStatus.AsError(), reason, preBindStatus.Message())
             return
         }
-        
+
         // 9.4 执行 binding 插件
         err := sched.bind(bindingCycleCtx, prof, assumedPod, scheduleResult.SuggestedHost, state)
         metrics.E2eSchedulingLatency.Observe(metrics.SinceInSeconds(start))
