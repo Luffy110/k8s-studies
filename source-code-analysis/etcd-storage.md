@@ -6,9 +6,9 @@
 
 ## 代码框架
 
-RestfulStorage -> RegisterStore -> Storage.Interface -> CacherStorage -> UnderlyingStorage -> ETCD Client.
+下面这个是 ETCD storage 的封装层级图：
 
-TODO: here will put an etcd storage architecture picture.
+![storagelayers](images/storagelayers.png)
 
 这里大家要牢记这个框架。因为下面会对每个部分对照源码进行详细的分析。
 
@@ -697,6 +697,10 @@ func newStore(c *clientv3.Client, pagingEnabled bool, codec runtime.Codec, prefi
 这里就是创建了个 store 的结构，然后实现了 storage.Interface 的接口。可以从 [store.go](https://github.com/kubernetes/apiserver/blob/release-1.18/pkg/storage/etcd3/store.go) 文件中看到。
 
 ### CacherStorage 分析
+
+带有 cache 的 storage 比较复杂，这里给出大致的处理流图：
+
+![cacherstorage](images/cacherstorage.png)
 
 下面我们再来分析分析复杂的带 cache 的 CacherStorage。
 
